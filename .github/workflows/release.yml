@@ -1,0 +1,101 @@
+name: Build & Release Arch Package
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-arch-package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Cache Pacman
+        uses: actions/cache@v4
+        with:
+          path: pacman-cache/
+          key: ${{ runner.os }}-pacman-alga-v1
+          
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: cargo-cache/
+          key: ${{ runner.os }}-cargo-alga-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-alga-
+            
+      - name: Build PKGBUILD in Arch container
+        run: |
+          mkdir -p pacman-cache cargo-cache out
+          
+          # Generate PKGBUILD dynamically for the current commit
+          cat << 'EOF' > PKGBUILD
+          pkgname=alga
+          pkgver=1.0.0
+          pkgrel=${{ github.run_number }}
+          pkgdesc="A GTK4/Libadwaita frontend for bootc operations"
+          arch=('x86_64')
+          url="https://github.com/zamkara/alga"
+          license=('MIT')
+          depends=('gtk4' 'libadwaita' 'vte3' 'polkit')
+          makedepends=('cargo')
+          source=()
+          
+          build() {
+            cd /work
+            cargo build --release --locked
+          }
+          
+          package() {
+            cd /work
+            install -Dm755 "target/release/alga" "$pkgdir/usr/bin/alga"
+            install -Dm644 "data/alga.svg" "$pkgdir/usr/share/icons/hicolor/scalable/apps/alga.svg" || true
+            install -Dm644 "data/alga.desktop" "$pkgdir/usr/share/applications/alga.desktop" || true
+          }
+          EOF
+          
+          sudo podman run --rm --privileged -v $(pwd):/work -v $(pwd)/pacman-cache:/var/cache/pacman/pkg -v $(pwd)/cargo-cache:/home/builduser/.cargo -w /work docker.io/archlinux:latest bash -c "
+            pacman -Syu --noconfirm base-devel sudo rust
+            useradd -m builduser || true
+            chown -R builduser:builduser /home/builduser
+            echo 'builduser ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/builduser
+            chown -R builduser:builduser /work
+            sudo -u builduser bash -c 'cd /work && makepkg -s --noconfirm'
+            cp /work/*.pkg.tar.zst /work/out/
+          "
+          sudo chown -R $USER:$USER out/ pacman-cache/ cargo-cache/
+          
+      - name: Upload Package Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: alga-package
+          path: out/*.pkg.tar.zst
+
+  release:
+    needs: build-arch-package
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - name: Download Package
+        uses: actions/download-artifact@v4
+        with:
+          name: alga-package
+          path: pkg/
+      - name: Delete old release
+        run: gh release delete latest --cleanup-tag -y -R ${{ github.repository }} || true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Create Nightly Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: "Latest Arch Linux Package"
+          body: |
+            Automated Arch Linux package build for `alga` installer.
+          files: pkg/*.pkg.tar.zst
+          prerelease: true
+          make_latest: true
