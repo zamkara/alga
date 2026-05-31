@@ -763,8 +763,32 @@ fn build_ui(app: &Application) {
             let rt = tokio::runtime::Runtime::new().unwrap();
             rt.block_on(async {
                 let bootc_cmd = format!(
-                    "killall -9 bootc skopeo 2>/dev/null || true; for p in {}*; do umount -l $p 2>/dev/null || true; done; umount -l /run/bootc/mounts/rootfs 2>/dev/null || true; btrfs device scan --forget 2>/dev/null || true; wipefs -af {}* 2>/dev/null || true; bootc install to-disk --wipe --filesystem btrfs --bootloader none --source-imgref docker://{} {} && mount {}3 /mnt && DEPLOY_ETC=$(ls -d /mnt/ostree/deploy/default/deploy/*/etc | head -n 1) && mkdir -p $DEPLOY_ETC/systemd && if [ \"{}\" != \"disabled\" ]; then echo \"[zram0]\" > $DEPLOY_ETC/systemd/zram-generator.conf; echo \"compression-algorithm = zstd\" >> $DEPLOY_ETC/systemd/zram-generator.conf; if [ \"{}\" = \"auto\" ]; then echo \"zram-size = ram / 2\" >> $DEPLOY_ETC/systemd/zram-generator.conf; else echo \"zram-size = {}\" >> $DEPLOY_ETC/systemd/zram-generator.conf; fi; else rm -f $DEPLOY_ETC/systemd/zram-generator.conf; fi && umount -l /mnt", 
-                    disk, disk, variant, disk, disk, zram_val, zram_val, zram_val
+                    "killall -9 bootc skopeo 2>/dev/null || true; \
+                     for p in {disk}*; do umount -l $p 2>/dev/null || true; done; \
+                     umount -l /run/bootc/mounts/rootfs 2>/dev/null || true; \
+                     btrfs device scan --forget 2>/dev/null || true; \
+                     wipefs -af {disk}* 2>/dev/null || true; \
+                     bootc install to-disk --wipe --filesystem btrfs --bootloader none --source-imgref docker://{variant} {disk} && \
+                     ROOT_PART=$(lsblk -rno PATH,PARTTYPE {disk} | grep -i '4f68bce3-e8cd-4db1-96e7-fbcaf984b709' | head -n1 | awk '{{print $1}}') && \
+                     [ -z \"$ROOT_PART\" ] && ROOT_PART=$(lsblk -rno PATH {disk} | grep -E \"({disk}p?3)$\" | head -n1) && \
+                     mount $ROOT_PART /mnt && \
+                     DEPLOY_ETC=$(ls -d /mnt/ostree/deploy/default/deploy/*/etc | head -n 1) && \
+                     mkdir -p $DEPLOY_ETC/systemd && \
+                     if [ \"{zram}\" != \"disabled\" ]; then \
+                       echo \"[zram0]\" > $DEPLOY_ETC/systemd/zram-generator.conf; \
+                       echo \"compression-algorithm = zstd\" >> $DEPLOY_ETC/systemd/zram-generator.conf; \
+                       if [ \"{zram}\" = \"auto\" ]; then \
+                         echo \"zram-size = ram / 2\" >> $DEPLOY_ETC/systemd/zram-generator.conf; \
+                       else \
+                         echo \"zram-size = {zram}\" >> $DEPLOY_ETC/systemd/zram-generator.conf; \
+                       fi; \
+                     else \
+                       rm -f $DEPLOY_ETC/systemd/zram-generator.conf; \
+                     fi && \
+                     umount -l /mnt",
+                    disk = disk,
+                    variant = variant,
+                    zram = zram_val
                 );
                 
                 let mut child_install = tokio::process::Command::new("pkexec")
@@ -812,36 +836,51 @@ fn build_ui(app: &Application) {
                 match status {
                     Ok(s) if s.success() => {
                         let _ = sender.send("95% Installing bootloader...".to_string());
-                        // L4+L5: Fixed bootloader installation for both GRUB and systemd-boot
                         let bootloader_cmd = format!(
                             "set -e; \
-                            EFI_PART=$(lsblk -rno PATH,PARTTYPE {disk} | grep -i 'c12a7328-f81f-11d2-ba4b-00a0c93ec93b' | head -n1 | awk '{{print $1}}'); \
-                            ROOT_PART=$(lsblk -rno PATH,PARTTYPE {disk} | grep -i '4f68bce3-e8cd-4db1-96e7-fbcaf984b709' | head -n1 | awk '{{print $1}}'); \
-                            [ -z \"$EFI_PART\" ] && echo 'Error: EFI partition not found' && exit 1; \
-                            [ -z \"$ROOT_PART\" ] && echo 'Error: Root partition not found' && exit 1; \
-                            mkdir -p /tmp/efi_mnt /tmp/root_mnt; \
-                            umount -l $EFI_PART 2>/dev/null || true; \
-                            umount -l $ROOT_PART 2>/dev/null || true; \
-                            mount $ROOT_PART /tmp/root_mnt; \
-                            mount $EFI_PART /tmp/efi_mnt; \
-                            DEPLOY_PATH=$(find /tmp/root_mnt/ostree/deploy/default/deploy -maxdepth 1 -name '*.0' -type d | head -n1); \
-                            [ -z \"$DEPLOY_PATH\" ] && echo 'Error: Deploy path not found' && exit 1; \
-                            mkdir -p \"$DEPLOY_PATH/sysroot\" \"$DEPLOY_PATH/ostree\"; \
-                            sed -i 's/transient=true/transient=false/g' /tmp/root_mnt/ostree/repo/config 2>/dev/null || true; \
-                            if [ \"{grub}\" = \"true\" ]; then \
-                              sed -i 's/bootloader=none/bootloader=grub2/' /tmp/root_mnt/ostree/repo/config; \
-                              grub-install --target=x86_64-efi --efi-directory=/tmp/efi_mnt --bootloader-id=ARKLINUX --boot-directory=/tmp/root_mnt/boot --recheck; \
-                              bootupctl adopt-and-update --sysroot=/tmp/root_mnt 2>/dev/null || true; \
-                              ostree admin bootloader-update --sysroot=/tmp/root_mnt 2>/dev/null || true; \
-                            else \
-                              sed -i 's/bootloader=none/bootloader=systemd-boot/' /tmp/root_mnt/ostree/repo/config; \
-                              bootctl install --esp-path=/tmp/efi_mnt --boot-path=/tmp/root_mnt/boot; \
-                              OSTREE_BOOT=$(find /tmp/root_mnt/boot/ostree -maxdepth 1 -type d | head -n1); \
-                              [ -n \"$OSTREE_BOOT\" ] && mkdir -p /tmp/efi_mnt/ostree && cp -r /tmp/root_mnt/boot/ostree/* /tmp/efi_mnt/ostree/ 2>/dev/null || true; \
-                              find /tmp/root_mnt/boot/loader/entries -name '*.conf' -exec sh -c 'cp {} /tmp/efi_mnt/loader/entries/ && sed -i s|/boot/ostree|/ostree|g /tmp/efi_mnt/loader/entries/$(basename {})' \\; 2>/dev/null || true; \
-                            fi; \
-                            umount /tmp/efi_mnt 2>/dev/null || true; \
-                            umount /tmp/root_mnt 2>/dev/null || true",
+                             EFI_PART=$(lsblk -rno PATH,PARTTYPE {disk} | grep -i 'c12a7328-f81f-11d2-ba4b-00a0c93ec93b' | head -n1 | awk '{{print $1}}'); \
+                             [ -z \"$EFI_PART\" ] && EFI_PART=$(lsblk -rno PATH {disk} | grep -E \"({disk}p?1)$\" | head -n1); \
+                             BOOT_PART=$(lsblk -rno PATH,PARTTYPE {disk} | grep -i 'bc13c2ff-59e6-4262-a352-b275fd6f7172' | head -n1 | awk '{{print $1}}'); \
+                             [ -z \"$BOOT_PART\" ] && BOOT_PART=$(lsblk -rno PATH {disk} | grep -E \"({disk}p?2)$\" | head -n1); \
+                             ROOT_PART=$(lsblk -rno PATH,PARTTYPE {disk} | grep -i '4f68bce3-e8cd-4db1-96e7-fbcaf984b709' | head -n1 | awk '{{print $1}}'); \
+                             [ -z \"$ROOT_PART\" ] && ROOT_PART=$(lsblk -rno PATH {disk} | grep -E \"({disk}p?3)$\" | head -n1); \
+                             [ -z \"$EFI_PART\" ] && echo 'Error: EFI partition not found' && exit 1; \
+                             [ -z \"$BOOT_PART\" ] && echo 'Error: Boot partition not found' && exit 1; \
+                             [ -z \"$ROOT_PART\" ] && echo 'Error: Root partition not found' && exit 1; \
+                             mkdir -p /tmp/root_mnt /tmp/efi_mnt; \
+                             umount -l /tmp/root_mnt/boot/efi 2>/dev/null || true; \
+                             umount -l /tmp/root_mnt/boot 2>/dev/null || true; \
+                             umount -l /tmp/root_mnt 2>/dev/null || true; \
+                             umount -l /tmp/efi_mnt 2>/dev/null || true; \
+                             mount $ROOT_PART /tmp/root_mnt; \
+                             mkdir -p /tmp/root_mnt/boot; \
+                             mount $BOOT_PART /tmp/root_mnt/boot; \
+                             mount $EFI_PART /tmp/efi_mnt; \
+                             DEPLOY_PATH=$(find /tmp/root_mnt/ostree/deploy/default/deploy -maxdepth 1 -name '*.0' -type d | head -n1); \
+                             [ -z \"$DEPLOY_PATH\" ] && echo 'Error: Deploy path not found' && exit 1; \
+                             mkdir -p \"$DEPLOY_PATH/sysroot\" \"$DEPLOY_PATH/ostree\"; \
+                             sed -i 's/transient=true/transient=false/g' /tmp/root_mnt/ostree/repo/config 2>/dev/null || true; \
+                             if [ \"{grub}\" = \"true\" ]; then \
+                               sed -i 's/bootloader=none/bootloader=grub2/' /tmp/root_mnt/ostree/repo/config; \
+                               grub-install --target=x86_64-efi --efi-directory=/tmp/efi_mnt --bootloader-id=ARKLINUX --boot-directory=/tmp/root_mnt/boot --recheck; \
+                               bootupctl adopt-and-update --sysroot=/tmp/root_mnt 2>/dev/null || true; \
+                               ostree admin bootloader-update --sysroot=/tmp/root_mnt 2>/dev/null || true; \
+                             else \
+                               sed -i 's/bootloader=none/bootloader=systemd-boot/' /tmp/root_mnt/ostree/repo/config; \
+                               bootctl install --esp-path=/tmp/efi_mnt --boot-path=/tmp/root_mnt/boot 2>/dev/null || bootctl install --esp-path=/tmp/efi_mnt --boot-path=/tmp/root_mnt/boot --no-variables 2>/dev/null || true; \
+                               if [ -d \"/tmp/root_mnt/boot/ostree\" ]; then \
+                                 mkdir -p /tmp/efi_mnt/ostree; \
+                                 cp -r /tmp/root_mnt/boot/ostree/* /tmp/efi_mnt/ostree/ 2>/dev/null || true; \
+                               fi; \
+                               if [ -d \"/tmp/root_mnt/boot/loader/entries\" ]; then \
+                                 mkdir -p /tmp/efi_mnt/loader/entries; \
+                                 cp /tmp/root_mnt/boot/loader/entries/*.conf /tmp/efi_mnt/loader/entries/ 2>/dev/null || true; \
+                                 sed -i 's|/boot/ostree|/ostree|g' /tmp/efi_mnt/loader/entries/*.conf 2>/dev/null || true; \
+                               fi; \
+                             fi; \
+                             umount -l /tmp/efi_mnt 2>/dev/null || true; \
+                             umount -l /tmp/root_mnt/boot 2>/dev/null || true; \
+                             umount -l /tmp/root_mnt 2>/dev/null || true",
                             disk = disk,
                             grub = if install_grub { "true" } else { "false" }
                         );
