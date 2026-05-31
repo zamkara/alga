@@ -18,6 +18,6 @@ build() {
 package() {
   cd "$pkgname"
   install -Dm755 "target/release/alga" "$pkgdir/usr/bin/alga"
-  install -Dm644 "data/alga.svg" "$pkgdir/usr/share/icons/hicolor/scalable/apps/alga.svg" || true
-  install -Dm644 "data/alga.desktop" "$pkgdir/usr/share/applications/alga.desktop" || true
+  install -Dm644 "data/alga.svg" "$pkgdir/usr/share/icons/hicolor/scalable/apps/com.zamkara.alga.svg" || true
+  install -Dm644 "data/com.zamkara.alga.desktop" "$pkgdir/usr/share/applications/com.zamkara.alga.desktop" || true
 }
