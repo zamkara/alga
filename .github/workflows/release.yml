@@ -2,7 +2,7 @@ name: Build & Release Arch Package
 
 on:
   push:
-    branches: [master]
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -78,7 +78,7 @@ jobs:
   release:
     needs: build-arch-package
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/master'
+    if: github.ref == 'refs/heads/main'
     steps:
       - name: Download Package
         uses: actions/download-artifact@v4
