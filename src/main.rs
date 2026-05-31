@@ -698,6 +698,15 @@ fn build_ui(app: &Application) {
         progress_bar.set_fraction(0.0);
         title4.set_label("<b>0% Starting installation...</b>");
 
+        // Clear and initialize verbose log file on Desktop
+        if let Ok(home) = std::env::var("HOME") {
+            let desktop_log = std::path::PathBuf::from(home).join("Desktop").join("log.txt");
+            if let Ok(mut file) = std::fs::File::create(&desktop_log) {
+                use std::io::Write;
+                let _ = writeln!(file, "=== Ark OS Installation Verbose Log ===");
+            }
+        }
+
         stack.set_visible_child_name("page4");
         cancel_btn.set_visible(true);
         cancel_btn.set_label("Cancel Install");
@@ -720,6 +729,15 @@ fn build_ui(app: &Application) {
         *cancel_sender.borrow_mut() = Some(kill_tx);
         
         receiver.attach(None, clone!(@weak text_view, @weak progress_bar, @weak stack, @weak cancel_btn, @weak title4, @strong cancel_sender, @strong pulse_timeout => @default-return glib::ControlFlow::Break, move |msg: String| {
+            // Append raw log line to ~/Desktop/log.txt
+            if let Ok(home) = std::env::var("HOME") {
+                let desktop_log = std::path::PathBuf::from(home).join("Desktop").join("log.txt");
+                if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(&desktop_log) {
+                    use std::io::Write;
+                    let _ = writeln!(file, "{}", msg);
+                }
+            }
+
             if msg.starts_with("EOF_") {
                 if let Some(id) = pulse_timeout.borrow_mut().take() {
                     id.remove();
