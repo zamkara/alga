@@ -776,8 +776,8 @@ fn build_ui(app: &Application) {
                      btrfs device scan --forget 2>/dev/null || true; \
                      wipefs -af {disk}* 2>/dev/null || true; \
                      bootc install to-disk --wipe --filesystem btrfs --bootloader none --source-imgref docker://{variant} {disk} && \
-                     ROOT_PART=$(lsblk -rno PATH,PARTTYPE {disk} | grep -i '4f68bce3-e8cd-4db1-96e7-fbcaf984b709' | head -n1 | awk '{{print $1}}') && \
-                     [ -z \"$ROOT_PART\" ] && ROOT_PART=$(lsblk -rno PATH {disk} | grep -E \"({disk}p?3)$\" | head -n1) && \
+                     ROOT_PART=$(lsblk -rno PATH,PARTTYPE {disk} | grep -i '4f68bce3-e8cd-4db1-96e7-fbcaf984b709' | head -n1 | awk '{{print $1}}'); \
+                     if [ -z \"$ROOT_PART\" ]; then ROOT_PART=$(lsblk -rno PATH {disk} | grep -E \"({disk}p?3)$\" | head -n1); fi && \
                      mount $ROOT_PART /mnt && \
                      DEPLOY_ETC=$(ls -d /mnt/ostree/deploy/default/deploy/*/etc | head -n 1) && \
                      mkdir -p $DEPLOY_ETC/systemd && \
@@ -846,11 +846,11 @@ fn build_ui(app: &Application) {
                         let bootloader_cmd = format!(
                             "set -e; \
                              EFI_PART=$(lsblk -rno PATH,PARTTYPE {disk} | grep -i 'c12a7328-f81f-11d2-ba4b-00a0c93ec93b' | head -n1 | awk '{{print $1}}'); \
-                             [ -z \"$EFI_PART\" ] && EFI_PART=$(lsblk -rno PATH {disk} | grep -E \"({disk}p?1)$\" | head -n1); \
+                             if [ -z \"$EFI_PART\" ]; then EFI_PART=$(lsblk -rno PATH {disk} | grep -E \"({disk}p?1)$\" | head -n1); fi; \
                              BOOT_PART=$(lsblk -rno PATH,PARTTYPE {disk} | grep -i 'bc13c2ff-59e6-4262-a352-b275fd6f7172' | head -n1 | awk '{{print $1}}'); \
-                             [ -z \"$BOOT_PART\" ] && BOOT_PART=$(lsblk -rno PATH {disk} | grep -E \"({disk}p?2)$\" | head -n1); \
+                             if [ -z \"$BOOT_PART\" ]; then BOOT_PART=$(lsblk -rno PATH {disk} | grep -E \"({disk}p?2)$\" | head -n1); fi; \
                              ROOT_PART=$(lsblk -rno PATH,PARTTYPE {disk} | grep -i '4f68bce3-e8cd-4db1-96e7-fbcaf984b709' | head -n1 | awk '{{print $1}}'); \
-                             [ -z \"$ROOT_PART\" ] && ROOT_PART=$(lsblk -rno PATH {disk} | grep -E \"({disk}p?3)$\" | head -n1); \
+                             if [ -z \"$ROOT_PART\" ]; then ROOT_PART=$(lsblk -rno PATH {disk} | grep -E \"({disk}p?3)$\" | head -n1); fi; \
                              [ -z \"$EFI_PART\" ] && echo 'Error: EFI partition not found' && exit 1; \
                              [ -z \"$BOOT_PART\" ] && echo 'Error: Boot partition not found' && exit 1; \
                              [ -z \"$ROOT_PART\" ] && echo 'Error: Root partition not found' && exit 1; \
