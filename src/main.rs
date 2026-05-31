@@ -309,7 +309,7 @@ fn build_ui(app: &Application) {
     content1.set_vexpand(true);
     
     let app_icon = Image::builder()
-        .icon_name("drive-harddisk")
+        .file("/usr/share/icons/MoreWaita/scalable/devices/drive-harddisk-solidstate.svg")
         .pixel_size(96)
         .halign(gtk::Align::Center)
         .margin_bottom(24)
