@@ -663,7 +663,7 @@ fn build_ui(app: &Application) {
             (k, true) => format!("ark-{}-nvidia", k),
         };
         
-        *target_variant.borrow_mut() = format!("ghcr.io/zamkara/ark.linux:{}", var_name);
+        *target_variant.borrow_mut() = format!("ghcr.io/zamkara/ark-image:{}", var_name);
         
         let zram_idx = combo_zram.selected();
         *target_zram.borrow_mut() = match zram_idx {
