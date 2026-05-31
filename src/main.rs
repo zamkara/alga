@@ -309,7 +309,7 @@ fn build_ui(app: &Application) {
     content1.set_vexpand(true);
     
     let app_icon = Image::builder()
-        .icon_name("drive-harddisk-solidstate")
+        .icon_name("drive-harddisk")
         .pixel_size(96)
         .halign(gtk::Align::Center)
         .margin_bottom(24)
@@ -875,6 +875,13 @@ fn build_ui(app: &Application) {
                              else \
                                sed -i 's/bootloader=none/bootloader=systemd-boot/' /tmp/root_mnt/ostree/repo/config; \
                                bootctl install --esp-path=/tmp/efi_mnt --boot-path=/tmp/root_mnt/boot 2>/dev/null || bootctl install --esp-path=/tmp/efi_mnt --boot-path=/tmp/root_mnt/boot --no-variables 2>/dev/null || true; \
+                               mkdir -p /tmp/efi_mnt/EFI/BOOT /tmp/efi_mnt/EFI/systemd /tmp/efi_mnt/loader; \
+                               cp /usr/lib/systemd/boot/efi/systemd-bootx64.efi /tmp/efi_mnt/EFI/BOOT/BOOTX64.EFI 2>/dev/null || true; \
+                               cp /usr/lib/systemd/boot/efi/systemd-bootx64.efi /tmp/efi_mnt/EFI/systemd/systemd-bootx64.efi 2>/dev/null || true; \
+                               if [ ! -f /tmp/efi_mnt/loader/loader.conf ]; then \
+                                 echo \"timeout 3\" > /tmp/efi_mnt/loader/loader.conf; \
+                                 echo \"console-mode max\" >> /tmp/efi_mnt/loader/loader.conf; \
+                               fi; \
                                if [ -d \"/tmp/root_mnt/boot/ostree\" ]; then \
                                  mkdir -p /tmp/efi_mnt/ostree; \
                                  cp -r /tmp/root_mnt/boot/ostree/* /tmp/efi_mnt/ostree/ 2>/dev/null || true; \
