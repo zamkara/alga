@@ -691,6 +691,13 @@ fn build_ui(app: &Application) {
     }));
     
     erase_btn3.connect_clicked(clone!(@weak stack, @weak text_view, @weak progress_bar, @weak cancel_btn, @weak title4, @strong target_disk, @strong target_variant, @strong target_zram, @strong cancel_sender, @strong pulse_timeout, @weak grub_switch => move |_| {
+        // Reset UI state for installation/retry
+        text_view.buffer().set_text("");
+        progress_bar.remove_css_class("error");
+        progress_bar.remove_css_class("success");
+        progress_bar.set_fraction(0.0);
+        title4.set_label("<b>0% Starting installation...</b>");
+
         stack.set_visible_child_name("page4");
         cancel_btn.set_visible(true);
         cancel_btn.set_label("Cancel Install");
