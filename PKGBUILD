@@ -21,4 +21,6 @@ package() {
   install -Dm644 "data/alga.svg" "$pkgdir/usr/share/icons/hicolor/scalable/apps/com.zamkara.alga.svg" || true
   install -Dm644 "data/com.zamkara.alga.desktop" "$pkgdir/usr/share/applications/com.zamkara.alga.desktop" || true
   install -Dm644 "data/ready-to-go.svg" "$pkgdir/usr/share/alga/ready-to-go.svg" || true
+  install -Dm644 "data/check-for-update.svg" "$pkgdir/usr/share/alga/check-for-update.svg" || true
+  install -Dm644 "data/update-available.svg" "$pkgdir/usr/share/alga/update-available.svg" || true
 }

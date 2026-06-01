@@ -207,10 +207,12 @@ fn build_updater_ui(app: &Application) {
                         let stderr = String::from_utf8_lossy(&out.stderr);
                         let lower = format!("{}{}", stdout, stderr).to_lowercase();
 
-                        if out.status.success() && lower.contains("no upgrade available") {
-                            let _ = sender.send("UP_TO_DATE".to_string());
-                        } else if out.status.success() || lower.contains("upgrade") || lower.contains("digest:") {
-                            let _ = sender.send("UPDATE_AVAILABLE".to_string());
+                        if out.status.success() {
+                            if lower.contains("no update available") || lower.contains("no changes") {
+                                let _ = sender.send("UP_TO_DATE".to_string());
+                            } else {
+                                let _ = sender.send("UPDATE_AVAILABLE".to_string());
+                            }
                         } else {
                             let _ = sender.send("CHECK_FAILED".to_string());
                         }
@@ -306,11 +308,7 @@ fn build_updater_ui(app: &Application) {
                     let status = child.wait().await;
                     match status {
                         Ok(s) if s.success() => {
-                            log_to_desktop("[upgrade] bootc upgrade succeeded, regenerating boot entries...");
-                            let _ = tokio::process::Command::new("pkexec")
-                                .args(["ostree", "admin", "bootloader-update", "--sysroot=/"])
-                                .output()
-                                .await;
+                            log_to_desktop("[upgrade] bootc upgrade succeeded");
                             let _ = sender.send("EOF_SUCCESS".to_string());
                         },
                         _ => {
@@ -712,7 +710,7 @@ fn build_ui(app: &Application) {
     
     let title5 = Label::builder().label("<b>Installation Complete!</b>").use_markup(true).build();
     title5.add_css_class("title-1");
-    let success_lbl = Label::new(Some("Ark OS is successfully installed. Reboot to start using your new system."));
+    let success_lbl = Label::new(Some("Ark Project is successfully installed. Reboot to start using your new system."));
     success_lbl.set_wrap(true);
     success_lbl.set_justify(gtk::Justification::Center);
     content5.append(&success_icon);
@@ -817,7 +815,7 @@ fn build_ui(app: &Application) {
             let desktop_log = std::path::PathBuf::from(home).join("Desktop").join("log.txt");
             if let Ok(mut file) = std::fs::File::create(&desktop_log) {
                 use std::io::Write;
-                let _ = writeln!(file, "=== Ark OS Installation Verbose Log ===");
+                let _ = writeln!(file, "=== Ark Project Installation Verbose Log ===");
             }
         }
 
@@ -999,11 +997,20 @@ fn build_ui(app: &Application) {
                              [ -z \"$DEPLOY_PATH\" ] && echo 'Error: Deploy path not found' && exit 1; \
                              mkdir -p \"$DEPLOY_PATH/sysroot\" \"$DEPLOY_PATH/ostree\"; \
                              sed -i 's/transient=true/transient=false/g' /tmp/root_mnt/ostree/repo/config 2>/dev/null || true; \
-                             if [ \"{grub}\" = \"true\" ]; then \
-                               sed -i 's/bootloader=none/bootloader=grub2/' /tmp/root_mnt/ostree/repo/config; \
-                               grub-install --target=x86_64-efi --efi-directory=/tmp/efi_mnt --bootloader-id=ARKLINUX --boot-directory=/tmp/root_mnt/boot --recheck; \
-                               bootupctl adopt-and-update --sysroot=/tmp/root_mnt 2>/dev/null || true; \
-                               ostree admin bootloader-update --sysroot=/tmp/root_mnt 2>/dev/null || true; \
+                              if [ \"{grub}\" = \"true\" ]; then \
+                                sed -i 's/bootloader=none/bootloader=grub2/' /tmp/root_mnt/ostree/repo/config; \
+                                grub-install --target=x86_64-efi --efi-directory=/tmp/efi_mnt --bootloader-id=ARCHLINUX --boot-directory=/tmp/root_mnt/boot --recheck; \
+                                 DEPLOY_HASH=$(basename \"$DEPLOY_PATH\" .0); \
+                                 ROOT_UUID=$(blkid -s UUID -o value \"$ROOT_PART\"); \
+                                 {{ \
+                                     echo 'set default=0'; \
+                                     echo 'set timeout=5'; \
+                                     echo 'menuentry \"Arch Linux\" {{'; \
+                                     echo '    search --no-floppy --fs-uuid '\"$ROOT_UUID\"' --set=root'; \
+                                     echo '    linux /ostree/deploy/default/deploy/'\"$DEPLOY_HASH\"'.0/vmlinuz root=UUID='\"$ROOT_UUID\"' rw ostree=/ostree/boot.0/'\"$DEPLOY_HASH\"'/0 quiet splash'; \
+                                     echo '    initrd /ostree/deploy/default/deploy/'\"$DEPLOY_HASH\"'.0/initramfs.img'; \
+                                     echo '}}'; \
+                                 }} > /tmp/root_mnt/boot/grub/grub.cfg; \
                              else \
                                bootctl install --esp-path=/tmp/efi_mnt --boot-path=/tmp/root_mnt/boot 2>/dev/null || bootctl install --esp-path=/tmp/efi_mnt --boot-path=/tmp/root_mnt/boot --no-variables 2>/dev/null || true; \
                                mkdir -p /tmp/efi_mnt/EFI/BOOT /tmp/efi_mnt/EFI/systemd /tmp/efi_mnt/loader; \
