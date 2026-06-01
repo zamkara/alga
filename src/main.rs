@@ -12,6 +12,18 @@ use std::cell::RefCell;
 use std::env;
 use tokio::sync::oneshot;
 
+fn log_to_desktop(msg: &str) {
+    if let Ok(home) = std::env::var("HOME") {
+        let desktop_dir = std::path::PathBuf::from(&home).join("Desktop");
+        let _ = std::fs::create_dir_all(&desktop_dir);
+        let desktop_log = desktop_dir.join("log.txt");
+        if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(&desktop_log) {
+            use std::io::Write;
+            let _ = writeln!(file, "{}", msg);
+        }
+    }
+}
+
 fn main() {
     // Intercept CLI arguments
     let args: Vec<String> = env::args().collect();
@@ -172,6 +184,21 @@ fn build_updater_ui(app: &Application) {
         std::thread::spawn(move || {
             let rt = tokio::runtime::Runtime::new().unwrap();
             rt.block_on(async {
+                // Fix: auto-correct invalid bootloader config left by old Alga versions
+                // that incorrectly wrote 'bootloader=systemd-boot' (invalid for ostree)
+                let fix_cmd = "bash -c 'if [ -f /ostree/repo/config ]; then \
+                    sed -i s/bootloader=systemd-boot/bootloader=none/ /ostree/repo/config 2>/dev/null || true; \
+                    fi'";
+                log_to_desktop(&format!("[upgrade] Running pre-upgrade bootloader fix: {}", fix_cmd));
+                let _ = tokio::process::Command::new("pkexec")
+                    .args(["bash", "-c",
+                        "if [ -f /ostree/repo/config ]; then \
+                         sed -i 's/bootloader=systemd-boot/bootloader=none/' /ostree/repo/config 2>/dev/null || true; \
+                         fi"])
+                    .output()
+                    .await;
+
+                log_to_desktop("[upgrade] Running: pkexec bootc upgrade");
                 let mut child = tokio::process::Command::new("pkexec")
                     .args(["bootc", "upgrade"])
                     .stdout(Stdio::piped())
@@ -222,6 +249,7 @@ fn build_updater_ui(app: &Application) {
                     progress_bar.set_fraction(1.0);
                     update_btn.set_label("Update Complete! Reboot required.");
                     update_btn.add_css_class("success");
+                    log_to_desktop("[upgrade] EOF_SUCCESS: update completed.");
                     return glib::ControlFlow::Break;
                 } else if text == "EOF_ERROR" {
                     if let Some(source_id) = pulse_timeout.borrow_mut().take() {
@@ -231,9 +259,11 @@ fn build_updater_ui(app: &Application) {
                     update_btn.set_label("Update Failed.");
                     update_btn.add_css_class("destructive");
                     update_btn.set_sensitive(true);
+                    log_to_desktop("[upgrade] EOF_ERROR: update failed.");
                     return glib::ControlFlow::Break;
                 }
                 
+                log_to_desktop(&format!("[upgrade] {}", text));
                 let buffer = text_view.buffer();
                 let mut end_iter = buffer.end_iter();
                 buffer.insert(&mut end_iter, &format!("{}\n", text));
@@ -888,7 +918,6 @@ fn build_ui(app: &Application) {
                                bootupctl adopt-and-update --sysroot=/tmp/root_mnt 2>/dev/null || true; \
                                ostree admin bootloader-update --sysroot=/tmp/root_mnt 2>/dev/null || true; \
                              else \
-                               sed -i 's/bootloader=none/bootloader=systemd-boot/' /tmp/root_mnt/ostree/repo/config; \
                                bootctl install --esp-path=/tmp/efi_mnt --boot-path=/tmp/root_mnt/boot 2>/dev/null || bootctl install --esp-path=/tmp/efi_mnt --boot-path=/tmp/root_mnt/boot --no-variables 2>/dev/null || true; \
                                mkdir -p /tmp/efi_mnt/EFI/BOOT /tmp/efi_mnt/EFI/systemd /tmp/efi_mnt/loader; \
                                cp /usr/lib/systemd/boot/efi/systemd-bootx64.efi /tmp/efi_mnt/EFI/BOOT/BOOTX64.EFI 2>/dev/null || true; \
