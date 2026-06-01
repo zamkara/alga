@@ -1,1 +1,21 @@
+# Rust
 /target
+# Cargo.lock is committed for applications (not libraries)
+
+
+# IDE
+.vscode/
+.idea/
+*.iml
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build artifacts (PKGBUILD)
+*.pkg.tar.zst
+pkg/
+src/

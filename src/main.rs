@@ -98,8 +98,8 @@ fn build_updater_ui(app: &Application) {
     let window = ApplicationWindow::builder()
         .application(app)
         .title("Software Updater")
-        .default_width(400)
-        .default_height(400)
+        .default_width(360)
+        .default_height(420)
         .build();
 
     let main_box = Box::new(Orientation::Vertical, 0);
@@ -111,33 +111,30 @@ fn build_updater_ui(app: &Application) {
     content_box.set_margin_bottom(32);
     content_box.set_margin_start(32);
     content_box.set_margin_end(32);
-    content_box.set_halign(gtk::Align::Center);
-    content_box.set_valign(gtk::Align::Center);
+    content_box.set_vexpand(true);
 
     let icon = Image::builder()
-        .icon_name("software-update-available-symbolic")
-        .pixel_size(96)
+        .file("/usr/share/alga/check-for-update.svg")
+        .pixel_size(128)
+        .halign(gtk::Align::Center)
+        .margin_bottom(12)
         .build();
     content_box.append(&icon);
 
-    let label = Label::builder()
-        .label("Arch Linux System Update")
+    let title = Label::builder()
+        .label("Software Updater")
         .css_classes(vec!["title-1".to_string()])
+        .halign(gtk::Align::Center)
         .build();
-    content_box.append(&label);
+    content_box.append(&title);
 
     let desc = Label::builder()
-        .label("Click update to download and install the latest system updates.")
+        .label("Check for available system updates.")
         .justify(gtk::Justification::Center)
         .wrap(true)
+        .halign(gtk::Align::Center)
         .build();
     content_box.append(&desc);
-
-    let update_btn = Button::builder()
-        .label("Update Now")
-        .css_classes(vec!["suggested-action".to_string(), "pill".to_string()])
-        .build();
-    content_box.append(&update_btn);
 
     let progress_bar = ProgressBar::builder()
         .visible(false)
@@ -149,136 +146,223 @@ fn build_updater_ui(app: &Application) {
         .editable(false)
         .cursor_visible(false)
         .wrap_mode(gtk::WrapMode::WordChar)
+        .left_margin(12)
+        .right_margin(12)
+        .top_margin(12)
+        .bottom_margin(12)
         .visible(false)
         .build();
+    text_view.add_css_class("monospace");
+    text_view.add_css_class("log-container");
     let scrolled = ScrolledWindow::builder()
         .child(&text_view)
+        .vexpand(true)
         .min_content_height(120)
         .visible(false)
         .build();
+    scrolled.add_css_class("log-wrapper");
     content_box.append(&scrolled);
 
-    let pulse_timeout: Rc<RefCell<Option<glib::SourceId>>> = Rc::new(RefCell::new(None));
+    main_box.append(&content_box);
 
-    update_btn.connect_clicked(clone!(@weak update_btn, @weak progress_bar, @weak text_view, @weak scrolled, @strong pulse_timeout => move |_| {
-        update_btn.set_sensitive(false);
-        update_btn.set_label("Updating...");
-        progress_bar.set_visible(true);
-        scrolled.set_visible(true);
-        text_view.set_visible(true);
-        
-        #[allow(deprecated)]
-        let (sender, receiver) = glib::MainContext::channel(glib::Priority::DEFAULT);
-        
-        *pulse_timeout.borrow_mut() = Some(glib::timeout_add_local(
-            std::time::Duration::from_millis(100),
-            clone!(@weak progress_bar => @default-return glib::ControlFlow::Break, move || {
-                progress_bar.pulse();
-                glib::ControlFlow::Continue
-            })
-        ));
+    let footer = Box::new(Orientation::Horizontal, 0);
+    footer.set_margin_top(16);
+    footer.set_margin_bottom(24);
+    footer.set_margin_start(24);
+    footer.set_margin_end(24);
 
-        let buffer = text_view.buffer();
-        buffer.set_text("Starting update process...\n");
+    let action_btn = Button::builder()
+        .label("Check for Updates")
+        .css_classes(vec!["suggested-action".to_string()])
+        .hexpand(true)
+        .build();
+    footer.append(&action_btn);
+    main_box.append(&footer);
 
-        std::thread::spawn(move || {
-            let rt = tokio::runtime::Runtime::new().unwrap();
-            rt.block_on(async {
-                // Fix: auto-correct invalid bootloader config left by old Alga versions
-                // that incorrectly wrote 'bootloader=systemd-boot' (invalid for ostree)
-                let fix_cmd = "bash -c 'if [ -f /ostree/repo/config ]; then \
-                    sed -i s/bootloader=systemd-boot/bootloader=none/ /ostree/repo/config 2>/dev/null || true; \
-                    fi'";
-                log_to_desktop(&format!("[upgrade] Running pre-upgrade bootloader fix: {}", fix_cmd));
-                let _ = tokio::process::Command::new("pkexec")
-                    .args(["bash", "-c",
-                        "if [ -f /ostree/repo/config ]; then \
-                         sed -i 's/bootloader=systemd-boot/bootloader=none/' /ostree/repo/config 2>/dev/null || true; \
-                         fi"])
-                    .output()
-                    .await;
+    window.set_content(Some(&main_box));
+    window.present();
 
-                log_to_desktop("[upgrade] Running: pkexec bootc upgrade");
-                let mut child = tokio::process::Command::new("pkexec")
-                    .args(["bootc", "upgrade"])
-                    .stdout(Stdio::piped())
-                    .stderr(Stdio::piped())
-                    .spawn()
-                    .expect("Failed to execute bootc upgrade");
+    let state: Rc<RefCell<u8>> = Rc::new(RefCell::new(0));
 
-                let stdout = child.stdout.take().unwrap();
-                let stderr = child.stderr.take().unwrap();
-                
-                let mut reader_out = BufReader::new(stdout).lines();
-                let mut reader_err = BufReader::new(stderr).lines();
+    action_btn.connect_clicked(clone!(@weak action_btn, @weak progress_bar, @weak text_view, @weak scrolled, @weak desc, @weak icon, @strong state => move |_| {
+        let s = *state.borrow();
 
-                let sender_clone1 = sender.clone();
-                let t1 = tokio::spawn(async move {
-                    while let Ok(Some(line)) = reader_out.next_line().await {
-                        let _ = sender_clone1.send(line);
+        if s == 0 || s == 3 {
+            *state.borrow_mut() = 99;
+            action_btn.set_sensitive(false);
+            action_btn.set_label("Checking...");
+            desc.set_label("Checking for available system updates...");
+
+            #[allow(deprecated)]
+            let (sender, receiver) = glib::MainContext::channel(glib::Priority::DEFAULT);
+
+            std::thread::spawn(move || {
+                let output = std::process::Command::new("pkexec")
+                    .args(["bootc", "upgrade", "--check"])
+                    .output();
+
+                match output {
+                    Ok(out) => {
+                        let stdout = String::from_utf8_lossy(&out.stdout);
+                        let stderr = String::from_utf8_lossy(&out.stderr);
+                        let lower = format!("{}{}", stdout, stderr).to_lowercase();
+
+                        if out.status.success() && lower.contains("no upgrade available") {
+                            let _ = sender.send("UP_TO_DATE".to_string());
+                        } else if out.status.success() || lower.contains("upgrade") || lower.contains("digest:") {
+                            let _ = sender.send("UPDATE_AVAILABLE".to_string());
+                        } else {
+                            let _ = sender.send("CHECK_FAILED".to_string());
+                        }
                     }
-                });
-
-                let sender_clone2 = sender.clone();
-                let t2 = tokio::spawn(async move {
-                    while let Ok(Some(line)) = reader_err.next_line().await {
-                        let _ = sender_clone2.send(line);
-                    }
-                });
-
-                let _ = tokio::join!(t1, t2);
-                let status = child.wait().await;
-                match status {
-                    Ok(s) if s.success() => {
-                        let _ = sender.send("EOF_SUCCESS".to_string());
-                    },
-                    _ => {
-                        let _ = sender.send("EOF_ERROR".to_string());
+                    Err(_) => {
+                        let _ = sender.send("CHECK_FAILED".to_string());
                     }
                 }
             });
-        });
 
-        receiver.attach(
-            None,
-            clone!(@weak text_view, @weak progress_bar, @weak update_btn, @strong pulse_timeout => @default-return glib::ControlFlow::Break, move |text| {
-                if text == "EOF_SUCCESS" {
-                    if let Some(source_id) = pulse_timeout.borrow_mut().take() {
-                        source_id.remove();
+            receiver.attach(None, clone!(@weak action_btn, @weak desc, @weak icon, @strong state => @default-return glib::ControlFlow::Break, move |msg| {
+                match msg.as_str() {
+                    "UPDATE_AVAILABLE" => {
+                        *state.borrow_mut() = 1;
+                        action_btn.set_sensitive(true);
+                        action_btn.set_label("Update Now");
+                        desc.set_label("A new system update is available. Click Update Now to install.");
+                        icon.set_file(Some("/usr/share/alga/update-available.svg"));
                     }
+                    "UP_TO_DATE" => {
+                        *state.borrow_mut() = 2;
+                        action_btn.set_label("Up to Date");
+                        action_btn.set_sensitive(false);
+                        desc.set_label("Your system is currently up to date.");
+                        icon.set_file(Some("/usr/share/alga/check-for-update.svg"));
+                    }
+                    "CHECK_FAILED" => {
+                        *state.borrow_mut() = 3;
+                        action_btn.set_label("Check Failed");
+                        action_btn.set_sensitive(true);
+                        desc.set_label("Unable to check for updates. Check your internet connection.");
+                    }
+                    _ => {}
+                }
+                glib::ControlFlow::Break
+            }));
+        } else if s == 1 {
+            *state.borrow_mut() = 4;
+            action_btn.set_sensitive(false);
+            action_btn.set_label("Updating...");
+            desc.set_label("Downloading and installing system update...");
+            progress_bar.set_visible(true);
+            scrolled.set_visible(true);
+            text_view.set_visible(true);
+
+            #[allow(deprecated)]
+            let (sender, receiver) = glib::MainContext::channel(glib::Priority::DEFAULT);
+
+            let buffer = text_view.buffer();
+            buffer.set_text("Starting update process...\n");
+
+            std::thread::spawn(move || {
+                let rt = tokio::runtime::Runtime::new().unwrap();
+                rt.block_on(async {
+                    log_to_desktop("[upgrade] Setting bootloader=systemd-boot for boot entry generation");
+                    let _ = tokio::process::Command::new("pkexec")
+                        .args(["bash", "-c",
+                            "if [ -f /ostree/repo/config ]; then \
+                             sed -i 's/bootloader=none/bootloader=systemd-boot/' /ostree/repo/config 2>/dev/null || true; \
+                             fi"])
+                        .output()
+                        .await;
+
+                    log_to_desktop("[upgrade] Running: pkexec bootc upgrade");
+                    let mut child = tokio::process::Command::new("pkexec")
+                        .args(["bootc", "upgrade"])
+                        .stdout(Stdio::piped())
+                        .stderr(Stdio::piped())
+                        .spawn()
+                        .expect("Failed to execute bootc upgrade");
+
+                    let stdout = child.stdout.take().unwrap();
+                    let stderr = child.stderr.take().unwrap();
+
+                    let mut reader_out = BufReader::new(stdout).lines();
+                    let mut reader_err = BufReader::new(stderr).lines();
+
+                    let sender_clone1 = sender.clone();
+                    let t1 = tokio::spawn(async move {
+                        while let Ok(Some(line)) = reader_out.next_line().await {
+                            let _ = sender_clone1.send(line);
+                        }
+                    });
+
+                    let sender_clone2 = sender.clone();
+                    let t2 = tokio::spawn(async move {
+                        while let Ok(Some(line)) = reader_err.next_line().await {
+                            let _ = sender_clone2.send(line);
+                        }
+                    });
+
+                    let _ = tokio::join!(t1, t2);
+                    let status = child.wait().await;
+                    match status {
+                        Ok(s) if s.success() => {
+                            log_to_desktop("[upgrade] bootc upgrade succeeded, regenerating boot entries...");
+                            let _ = tokio::process::Command::new("pkexec")
+                                .args(["ostree", "admin", "bootloader-update", "--sysroot=/"])
+                                .output()
+                                .await;
+                            let _ = sender.send("EOF_SUCCESS".to_string());
+                        },
+                        _ => {
+                            let _ = sender.send("EOF_ERROR".to_string());
+                        }
+                    }
+                });
+            });
+
+            receiver.attach(None, clone!(@weak text_view, @weak progress_bar, @weak action_btn, @weak desc, @weak icon, @strong state => @default-return glib::ControlFlow::Break, move |text| {
+                if text == "EOF_SUCCESS" {
+                    *state.borrow_mut() = 5;
                     progress_bar.set_fraction(1.0);
-                    update_btn.set_label("Update Complete! Reboot required.");
-                    update_btn.add_css_class("success");
+                    action_btn.set_label("Reboot Now");
+                    action_btn.set_sensitive(true);
+                    desc.set_label("System update installed. Reboot to apply changes.");
+                    icon.set_file(Some("/usr/share/alga/ready-to-go.svg"));
                     log_to_desktop("[upgrade] EOF_SUCCESS: update completed.");
                     return glib::ControlFlow::Break;
                 } else if text == "EOF_ERROR" {
-                    if let Some(source_id) = pulse_timeout.borrow_mut().take() {
-                        source_id.remove();
-                    }
+                    *state.borrow_mut() = 6;
                     progress_bar.set_fraction(1.0);
-                    update_btn.set_label("Update Failed.");
-                    update_btn.add_css_class("destructive");
-                    update_btn.set_sensitive(true);
+                    action_btn.set_label("Update Failed");
+                    action_btn.set_sensitive(true);
+                    desc.set_label("Update encountered an error. Check the log for details.");
                     log_to_desktop("[upgrade] EOF_ERROR: update failed.");
                     return glib::ControlFlow::Break;
                 }
-                
+
+                if let Some(pct_pos) = text.rfind('%') {
+                    let before = &text[..pct_pos];
+                    if let Some(non_digit) = before.rfind(|c: char| !c.is_ascii_digit()) {
+                        if let Ok(pct) = before[non_digit + 1..].parse::<f64>() {
+                            progress_bar.set_fraction(pct / 100.0);
+                        }
+                    } else if let Ok(pct) = before.parse::<f64>() {
+                        progress_bar.set_fraction(pct / 100.0);
+                    }
+                }
+
                 log_to_desktop(&format!("[upgrade] {}", text));
                 let buffer = text_view.buffer();
                 let mut end_iter = buffer.end_iter();
                 buffer.insert(&mut end_iter, &format!("{}\n", text));
-                
+
                 let mark = buffer.create_mark(None, &buffer.end_iter(), false);
                 text_view.scroll_to_mark(&mark, 0.0, false, 0.0, 1.0);
-                
-                glib::ControlFlow::Continue
-            }),
-        );
-    }));
 
-    main_box.append(&content_box);
-    window.set_content(Some(&main_box));
-    window.present();
+                glib::ControlFlow::Continue
+            }));
+        }
+    }));
 }
 
 fn build_ui(app: &Application) {
@@ -822,7 +906,10 @@ fn build_ui(app: &Application) {
                      for p in {disk}*; do umount -l $p 2>/dev/null || true; done; \
                      umount -l /run/bootc/mounts/rootfs 2>/dev/null || true; \
                      btrfs device scan --forget 2>/dev/null || true; \
-                     wipefs -af {disk}* 2>/dev/null || true; \
+                     wipefs -af {disk}* || true; \
+                     dd if=/dev/zero of={disk} bs=1M count=1 status=none || true; \
+                     udevadm settle 2>/dev/null || true; \
+                     sleep 1 || true; \
                      bootc install to-disk --wipe --filesystem btrfs --bootloader none --source-imgref docker://{variant} {disk} && \
                      ROOT_PART=$(lsblk -rno PATH,FSTYPE {disk} | grep -i 'btrfs' | head -n1 | awk '{{print $1}}'); \
                      mount $ROOT_PART /mnt && \
