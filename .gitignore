@@ -18,4 +18,3 @@ Thumbs.db
 # Build artifacts (PKGBUILD)
 *.pkg.tar.zst
 pkg/
-src/
