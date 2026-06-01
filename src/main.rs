@@ -997,20 +997,40 @@ fn build_ui(app: &Application) {
                              [ -z \"$DEPLOY_PATH\" ] && echo 'Error: Deploy path not found' && exit 1; \
                              mkdir -p \"$DEPLOY_PATH/sysroot\" \"$DEPLOY_PATH/ostree\"; \
                              sed -i 's/transient=true/transient=false/g' /tmp/root_mnt/ostree/repo/config 2>/dev/null || true; \
-                              if [ \"{grub}\" = \"true\" ]; then \
-                                sed -i 's/bootloader=none/bootloader=grub2/' /tmp/root_mnt/ostree/repo/config; \
-                                grub-install --target=x86_64-efi --efi-directory=/tmp/efi_mnt --bootloader-id=ARCHLINUX --boot-directory=/tmp/root_mnt/boot --recheck; \
-                                 DEPLOY_HASH=$(basename \"$DEPLOY_PATH\" .0); \
-                                 ROOT_UUID=$(blkid -s UUID -o value \"$ROOT_PART\"); \
-                                 {{ \
-                                     echo 'set default=0'; \
-                                     echo 'set timeout=5'; \
-                                     echo 'menuentry \"Arch Linux\" {{'; \
-                                     echo '    search --no-floppy --fs-uuid '\"$ROOT_UUID\"' --set=root'; \
-                                     echo '    linux /ostree/deploy/default/deploy/'\"$DEPLOY_HASH\"'.0/vmlinuz root=UUID='\"$ROOT_UUID\"' rw ostree=/ostree/boot.0/'\"$DEPLOY_HASH\"'/0 quiet splash'; \
-                                     echo '    initrd /ostree/deploy/default/deploy/'\"$DEPLOY_HASH\"'.0/initramfs.img'; \
-                                     echo '}}'; \
-                                 }} > /tmp/root_mnt/boot/grub/grub.cfg; \
+                                if [ \"{grub}\" = \"true\" ]; then \
+                                  sed -i 's/bootloader=none/bootloader=grub2/' /tmp/root_mnt/ostree/repo/config; \
+                                  grub-install --target=x86_64-efi --efi-directory=/tmp/efi_mnt --bootloader-id=ARCHLINUX --boot-directory=/tmp/root_mnt/boot --recheck; \
+                                  BOOT_PART_UUID=$(blkid -s UUID -o value \"$BOOT_PART\" 2>/dev/null) || true; \
+                                  ROOT_UUID=$(blkid -s UUID -o value \"$ROOT_PART\"); \
+                                  VMLINUZ=$(find /tmp/root_mnt/boot/ostree -maxdepth 2 -name 'vmlinuz-*' -type f 2>/dev/null | head -n1); \
+                                  INITRAMFS=$(find /tmp/root_mnt/boot/ostree -maxdepth 2 -name 'initramfs-*' -type f 2>/dev/null | head -n1); \
+                                  if [ -n \"$VMLINUZ\" ] && [ -n \"$BOOT_PART_UUID\" ]; then \
+                                    KERNEL_REL=$(echo \"$VMLINUZ\" | sed 's|/tmp/root_mnt/boot||'); \
+                                    INIT_REL=$(echo \"$INITRAMFS\" | sed 's|/tmp/root_mnt/boot||'); \
+                                    OSTREE_PARAM=$(grep -o 'ostree=[^ ]*' /tmp/root_mnt/boot/loader/entries/ostree-*.conf 2>/dev/null | head -n1) || true; \
+                                    [ -z \"$OSTREE_PARAM\" ] && OSTREE_PARAM=\"ostree=/ostree/boot.0/default/0\"; \
+                                    {{ \
+                                      echo 'set default=0'; \
+                                      echo 'set timeout=5'; \
+                                      echo 'menuentry \"Arch Linux\" {{'; \
+                                      echo '    search --no-floppy --fs-uuid '\"$ROOT_UUID\"' --set=root'; \
+                                      echo '    search --no-floppy --fs-uuid '\"$BOOT_PART_UUID\"' --set=boot_root'; \
+                                      echo '    linux ($boot_root)'\"$KERNEL_REL\"' root=UUID='\"$ROOT_UUID\"' rw quiet splash loglevel=3 rd.udev.log_priority=3 vt.global_cursor_default=0 '\"$OSTREE_PARAM\"''; \
+                                      echo '    initrd ($boot_root)'\"$INIT_REL\"''; \
+                                      echo '}}'; \
+                                    }} > /tmp/root_mnt/boot/grub/grub.cfg; \
+                                  else \
+                                    DEPLOY_HASH=$(basename \"$DEPLOY_PATH\" .0); \
+                                    {{ \
+                                      echo 'set default=0'; \
+                                      echo 'set timeout=5'; \
+                                      echo 'menuentry \"Arch Linux\" {{'; \
+                                      echo '    search --no-floppy --fs-uuid '\"$ROOT_UUID\"' --set=root'; \
+                                      echo '    linux /ostree/deploy/default/deploy/'\"$DEPLOY_HASH\"'.0/vmlinuz root=UUID='\"$ROOT_UUID\"' rw ostree=/ostree/boot.0/'\"$DEPLOY_HASH\"'/0 quiet splash'; \
+                                      echo '    initrd /ostree/deploy/default/deploy/'\"$DEPLOY_HASH\"'.0/initramfs.img'; \
+                                      echo '}}'; \
+                                    }} > /tmp/root_mnt/boot/grub/grub.cfg; \
+                                  fi; \
                              else \
                                bootctl install --esp-path=/tmp/efi_mnt --boot-path=/tmp/root_mnt/boot 2>/dev/null || bootctl install --esp-path=/tmp/efi_mnt --boot-path=/tmp/root_mnt/boot --no-variables 2>/dev/null || true; \
                                mkdir -p /tmp/efi_mnt/EFI/BOOT /tmp/efi_mnt/EFI/systemd /tmp/efi_mnt/loader; \
