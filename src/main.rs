@@ -33,12 +33,12 @@ fn main() {
 
         let status = std::process::Command::new("pkexec")
             .args(["bash", "-c",
-                "sed -i 's/bootloader=none/bootloader=systemd-boot/' /ostree/repo/config 2>/dev/null || true; \
+                "set -e; \
+                 sed -i 's/bootloader=.*/bootloader=systemd-boot/' /ostree/repo/config 2>/dev/null || true; \
                  bootc upgrade; \
-                 rc=$?; \
                  ostree admin bootloader-update --sysroot=/ 2>/dev/null || true; \
-                 sed -i 's/bootloader=none/bootloader=systemd-boot/' /ostree/repo/config 2>/dev/null || true; \
-                 exit $rc"])
+                 sed -i 's/bootloader=.*/bootloader=grub2/' /ostree/repo/config 2>/dev/null || true; \
+                 /usr/share/ark/grub-update.sh"])
             .stdin(Stdio::inherit())
             .stdout(Stdio::inherit())
             .stderr(Stdio::inherit())
@@ -274,7 +274,7 @@ fn build_updater_ui(app: &Application) {
                     let _ = tokio::process::Command::new("pkexec")
                         .args(["bash", "-c",
                             "if [ -f /ostree/repo/config ]; then \
-                             sed -i 's/bootloader=none/bootloader=systemd-boot/' /ostree/repo/config 2>/dev/null || true; \
+                             sed -i 's/bootloader=.*/bootloader=systemd-boot/' /ostree/repo/config 2>/dev/null || true; \
                              fi"])
                         .output()
                         .await;
@@ -315,7 +315,8 @@ fn build_updater_ui(app: &Application) {
                             let _ = tokio::process::Command::new("pkexec")
                                 .args(["bash", "-c",
                                     "ostree admin bootloader-update --sysroot=/ 2>/dev/null || true; \
-                                     sed -i 's/bootloader=none/bootloader=systemd-boot/' /ostree/repo/config 2>/dev/null || true"])
+                                     sed -i 's/bootloader=.*/bootloader=grub2/' /ostree/repo/config 2>/dev/null || true; \
+                                     /usr/share/ark/grub-update.sh"])
                                 .output()
                                 .await;
                             log_to_desktop("[upgrade] Boot entries updated");
