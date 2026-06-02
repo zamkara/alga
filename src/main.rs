@@ -30,17 +30,20 @@ fn main() {
     if args.len() > 1 && args[1] == "update" {
         println!("🚀 Initiating Arch Linux System Update...");
         println!("Please authenticate if prompted.");
-        
-        let mut child = std::process::Command::new("pkexec")
-            .arg("bootc")
-            .arg("upgrade")
+
+        let status = std::process::Command::new("pkexec")
+            .args(["bash", "-c",
+                "sed -i 's/bootloader=none/bootloader=systemd-boot/' /ostree/repo/config 2>/dev/null || true; \
+                 bootc upgrade; \
+                 rc=$?; \
+                 ostree admin bootloader-update --sysroot=/ 2>/dev/null || true; \
+                 sed -i 's/bootloader=none/bootloader=systemd-boot/' /ostree/repo/config 2>/dev/null || true; \
+                 exit $rc"])
             .stdin(Stdio::inherit())
             .stdout(Stdio::inherit())
             .stderr(Stdio::inherit())
-            .spawn()
+            .status()
             .expect("Failed to launch bootc upgrade");
-
-        let status = child.wait().expect("Failed to wait on bootc");
         
         if status.success() {
             println!("✅ System update completed successfully! Please reboot your system.");
@@ -308,7 +311,14 @@ fn build_updater_ui(app: &Application) {
                     let status = child.wait().await;
                     match status {
                         Ok(s) if s.success() => {
-                            log_to_desktop("[upgrade] bootc upgrade succeeded");
+                            log_to_desktop("[upgrade] bootc upgrade succeeded, regenerating boot entries...");
+                            let _ = tokio::process::Command::new("pkexec")
+                                .args(["bash", "-c",
+                                    "ostree admin bootloader-update --sysroot=/ 2>/dev/null || true; \
+                                     sed -i 's/bootloader=none/bootloader=systemd-boot/' /ostree/repo/config 2>/dev/null || true"])
+                                .output()
+                                .await;
+                            log_to_desktop("[upgrade] Boot entries updated");
                             let _ = sender.send("EOF_SUCCESS".to_string());
                         },
                         _ => {
