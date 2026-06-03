@@ -33,12 +33,13 @@ fn main() {
 
         let status = std::process::Command::new("pkexec")
             .args(["bash", "-c",
-                "set -e; \
+                "ORIG=$(sed -n 's/^bootloader=//p' /ostree/repo/config 2>/dev/null || echo 'none'); \
                  sed -i 's/bootloader=.*/bootloader=systemd-boot/' /ostree/repo/config 2>/dev/null || true; \
-                 bootc upgrade; \
+                 bootc upgrade; rc=$?; \
                  ostree admin bootloader-update --sysroot=/ 2>/dev/null || true; \
-                 sed -i 's/bootloader=.*/bootloader=grub2/' /ostree/repo/config 2>/dev/null || true; \
-                 /usr/share/ark/grub-update.sh"])
+                 sed -i \"s/bootloader=.*/bootloader=$ORIG/\" /ostree/repo/config 2>/dev/null || true; \
+                 /usr/share/ark/grub-update.sh; \
+                 exit $rc"])
             .stdin(Stdio::inherit())
             .stdout(Stdio::inherit())
             .stderr(Stdio::inherit())
@@ -270,12 +271,11 @@ fn build_updater_ui(app: &Application) {
             std::thread::spawn(move || {
                 let rt = tokio::runtime::Runtime::new().unwrap();
                 rt.block_on(async {
-                    log_to_desktop("[upgrade] Setting bootloader=systemd-boot for boot entry generation");
+                    log_to_desktop("[upgrade] Saving original bootloader and setting systemd-boot");
                     let _ = tokio::process::Command::new("pkexec")
                         .args(["bash", "-c",
-                            "if [ -f /ostree/repo/config ]; then \
-                             sed -i 's/bootloader=.*/bootloader=systemd-boot/' /ostree/repo/config 2>/dev/null || true; \
-                             fi"])
+                            "grep '^bootloader=' /ostree/repo/config 2>/dev/null | grep -o '[^=]*$' > /tmp/ark-bootloader 2>/dev/null || echo 'none' > /tmp/ark-bootloader; \
+                             sed -i 's/bootloader=.*/bootloader=systemd-boot/' /ostree/repo/config 2>/dev/null || true"])
                         .output()
                         .await;
 
@@ -309,23 +309,34 @@ fn build_updater_ui(app: &Application) {
 
                     let _ = tokio::join!(t1, t2);
                     let status = child.wait().await;
-                    match status {
+                    let ok = match status {
                         Ok(s) if s.success() => {
-                            log_to_desktop("[upgrade] bootc upgrade succeeded, regenerating boot entries...");
-                            let _ = tokio::process::Command::new("pkexec")
-                                .args(["bash", "-c",
-                                    "ostree admin bootloader-update --sysroot=/ 2>/dev/null || true; \
-                                     sed -i 's/bootloader=.*/bootloader=grub2/' /ostree/repo/config 2>/dev/null || true; \
-                                     /usr/share/ark/grub-update.sh"])
-                                .output()
-                                .await;
-                            log_to_desktop("[upgrade] Boot entries updated");
-                            let _ = sender.send("EOF_SUCCESS".to_string());
+                            log_to_desktop("[upgrade] bootc upgrade succeeded");
+                            true
                         },
                         _ => {
-                            let _ = sender.send("EOF_ERROR".to_string());
+                            log_to_desktop("[upgrade] bootc upgrade failed");
+                            false
                         }
-                    }
+                    };
+
+                    log_to_desktop("[upgrade] Restoring bootloader and regenerating boot entries...");
+                    let _ = tokio::process::Command::new("pkexec")
+                        .args(["bash", "-c",
+                             "ORIG=$(cat /tmp/ark-bootloader 2>/dev/null || echo 'none'); \
+                              ostree admin bootloader-update --sysroot=/ 2>/dev/null || true; \
+                              sed -i \"s/bootloader=.*/bootloader=$ORIG/\" /ostree/repo/config 2>/dev/null || true; \
+                              /usr/share/ark/grub-update.sh; \
+                              rm -f /tmp/ark-bootloader"])
+                        .output()
+                        .await;
+                    log_to_desktop("[upgrade] Boot entries updated");
+
+                    let _ = if ok {
+                        sender.send("EOF_SUCCESS".to_string())
+                    } else {
+                        sender.send("EOF_ERROR".to_string())
+                    };
                 });
             });
 
