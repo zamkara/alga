@@ -32,14 +32,7 @@ fn main() {
         println!("Please authenticate if prompted.");
 
         let status = std::process::Command::new("pkexec")
-            .args(["bash", "-c",
-                "ORIG=$(sed -n 's/^bootloader=//p' /ostree/repo/config 2>/dev/null || echo 'none'); \
-                 sed -i 's/bootloader=.*/bootloader=systemd-boot/' /ostree/repo/config 2>/dev/null || true; \
-                 bootc upgrade; rc=$?; \
-                 ostree admin bootloader-update --sysroot=/ 2>/dev/null || true; \
-                 sed -i \"s/bootloader=.*/bootloader=$ORIG/\" /ostree/repo/config 2>/dev/null || true; \
-                 /usr/share/ark/grub-update.sh; \
-                 exit $rc"])
+            .args(["bootc", "upgrade"])
             .stdin(Stdio::inherit())
             .stdout(Stdio::inherit())
             .stderr(Stdio::inherit())
@@ -271,14 +264,6 @@ fn build_updater_ui(app: &Application) {
             std::thread::spawn(move || {
                 let rt = tokio::runtime::Runtime::new().unwrap();
                 rt.block_on(async {
-                    log_to_desktop("[upgrade] Saving original bootloader and setting systemd-boot");
-                    let _ = tokio::process::Command::new("pkexec")
-                        .args(["bash", "-c",
-                            "grep '^bootloader=' /ostree/repo/config 2>/dev/null | grep -o '[^=]*$' > /tmp/ark-bootloader 2>/dev/null || echo 'none' > /tmp/ark-bootloader; \
-                             sed -i 's/bootloader=.*/bootloader=systemd-boot/' /ostree/repo/config 2>/dev/null || true"])
-                        .output()
-                        .await;
-
                     log_to_desktop("[upgrade] Running: pkexec bootc upgrade");
                     let mut child = tokio::process::Command::new("pkexec")
                         .args(["bootc", "upgrade"])
@@ -319,18 +304,6 @@ fn build_updater_ui(app: &Application) {
                             false
                         }
                     };
-
-                    log_to_desktop("[upgrade] Restoring bootloader and regenerating boot entries...");
-                    let _ = tokio::process::Command::new("pkexec")
-                        .args(["bash", "-c",
-                             "ORIG=$(cat /tmp/ark-bootloader 2>/dev/null || echo 'none'); \
-                              ostree admin bootloader-update --sysroot=/ 2>/dev/null || true; \
-                              sed -i \"s/bootloader=.*/bootloader=$ORIG/\" /ostree/repo/config 2>/dev/null || true; \
-                              /usr/share/ark/grub-update.sh; \
-                              rm -f /tmp/ark-bootloader"])
-                        .output()
-                        .await;
-                    log_to_desktop("[upgrade] Boot entries updated");
 
                     let _ = if ok {
                         sender.send("EOF_SUCCESS".to_string())
