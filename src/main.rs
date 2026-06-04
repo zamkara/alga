@@ -49,9 +49,6 @@ fn main() {
             .expect("Failed to launch bootc upgrade");
         
         if status.success() {
-            let _ = std::process::Command::new("pkexec")
-                .args(["bash", "-c", BLS_SYNC_SCRIPT])
-                .status();
             println!("✅ System update completed successfully! Please reboot your system.");
         } else {
             println!("❌ System update failed with status: {}", status);
@@ -326,11 +323,6 @@ fn build_updater_ui(app: &Application) {
                     };
 
                     if ok {
-                        let _ = sender.send("Synchronizing bootloader entries...".to_string());
-                        let _ = tokio::process::Command::new("pkexec")
-                            .args(["bash", "-c", BLS_SYNC_SCRIPT])
-                            .output()
-                            .await;
                         let _ = sender.send("EOF_SUCCESS".to_string());
                     } else {
                         let _ = sender.send("Rolling back failed update...".to_string());
