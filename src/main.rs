@@ -24,6 +24,15 @@ fn log_to_desktop(msg: &str) {
     }
 }
 
+const BLS_SYNC_SCRIPT: &str = r#"
+mount -o remount,rw /sysroot 2>/dev/null || true
+ORIG=$(ostree config --repo=/sysroot/ostree/repo get sysroot.bootloader 2>/dev/null || echo none)
+ostree config --repo=/sysroot/ostree/repo set sysroot.bootloader grub2
+ostree admin bootloader-update --sysroot=/sysroot 2>/dev/null || true
+ostree config --repo=/sysroot/ostree/repo set sysroot.bootloader "$ORIG"
+mount -o remount,ro /sysroot 2>/dev/null || true
+"#;
+
 fn main() {
     // Intercept CLI arguments
     let args: Vec<String> = env::args().collect();
@@ -40,9 +49,20 @@ fn main() {
             .expect("Failed to launch bootc upgrade");
         
         if status.success() {
+            let _ = std::process::Command::new("pkexec")
+                .args(["bash", "-c", BLS_SYNC_SCRIPT])
+                .status();
             println!("✅ System update completed successfully! Please reboot your system.");
         } else {
             println!("❌ System update failed with status: {}", status);
+            println!("↩ Rolling back failed update...");
+            let _ = std::process::Command::new("pkexec")
+                .args(["bootc", "rollback"])
+                .status();
+            let _ = std::process::Command::new("pkexec")
+                .args(["bash", "-c", BLS_SYNC_SCRIPT])
+                .status();
+            println!("↩ Rollback complete. Bootloader entries synchronized.");
         }
         
         return;
@@ -305,10 +325,25 @@ fn build_updater_ui(app: &Application) {
                         }
                     };
 
-                    let _ = if ok {
-                        sender.send("EOF_SUCCESS".to_string())
+                    if ok {
+                        let _ = sender.send("Synchronizing bootloader entries...".to_string());
+                        let _ = tokio::process::Command::new("pkexec")
+                            .args(["bash", "-c", BLS_SYNC_SCRIPT])
+                            .output()
+                            .await;
+                        let _ = sender.send("EOF_SUCCESS".to_string());
                     } else {
-                        sender.send("EOF_ERROR".to_string())
+                        let _ = sender.send("Rolling back failed update...".to_string());
+                        let _ = tokio::process::Command::new("pkexec")
+                            .args(["bootc", "rollback"])
+                            .output()
+                            .await;
+                        let _ = sender.send("Synchronizing bootloader entries...".to_string());
+                        let _ = tokio::process::Command::new("pkexec")
+                            .args(["bash", "-c", BLS_SYNC_SCRIPT])
+                            .output()
+                            .await;
+                        let _ = sender.send("EOF_ERROR".to_string());
                     };
                 });
             });
