@@ -27,12 +27,35 @@ fn log_to_desktop(msg: &str) {
 const BLS_SYNC_SCRIPT: &str = r#"
 set -euo pipefail
 SYSROOT="${SYSROOT:-/sysroot}"
-BOOT="${BOOT:-/boot}"
 OSTREE_REPO="$SYSROOT/ostree/repo"
 DEPLOY_BASE="$SYSROOT/ostree/deploy/default/deploy"
 
 [ ! -d "$OSTREE_REPO" ] && exit 0
 [ ! -d "$DEPLOY_BASE" ] && exit 0
+
+# Cari EFI System Partition — systemd-boot cuma baca dari sini
+ESP=""
+for candidate in "/boot" "/efi" "/boot/efi"; do
+    if mountpoint -q "$candidate" 2>/dev/null && df -T "$candidate" 2>/dev/null | grep -q vfat; then
+        ESP="$candidate"
+        break
+    fi
+done
+if [ -z "$ESP" ]; then
+    ESP_DEV=""
+    if command -v blkid >/dev/null 2>&1 && blkid -L EFI-SYSTEM >/dev/null 2>&1; then
+        ESP_DEV=$(blkid -L EFI-SYSTEM 2>/dev/null)
+    fi
+    if [ -z "$ESP_DEV" ] && command -v lsblk >/dev/null 2>&1; then
+        ESP_DEV=$(lsblk -o NAME,FSTYPE,LABEL -rn 2>/dev/null | awk '$2 == "vfat" && $3 == "EFI-SYSTEM" {print "/dev/"$1}' | head -1)
+    fi
+    if [ -n "$ESP_DEV" ]; then
+        ESP="/mnt/esp"
+        mkdir -p "$ESP" 2>/dev/null
+        mount "$ESP_DEV" "$ESP" 2>/dev/null || ESP=""
+    fi
+fi
+[ -z "$ESP" ] && exit 0
 
 if ! touch "$SYSROOT/.ark-bls-check" 2>/dev/null; then
     mount -o remount,rw "$SYSROOT" 2>/dev/null || true
@@ -42,7 +65,7 @@ rm -f "$SYSROOT/.ark-bls-check" 2>/dev/null || true
 deployments=$(ls -d "$DEPLOY_BASE"/*/ 2>/dev/null | xargs -n1 basename 2>/dev/null || true)
 [ -z "$deployments" ] && exit 0
 
-mkdir -p "$BOOT/loader/entries" "$BOOT/ostree"
+mkdir -p "$ESP/loader/entries" "$ESP/ostree"
 ROOT_UUID=$(findmnt -n -o UUID "$SYSROOT" 2>/dev/null || echo "")
 
 for deploy_id in $deployments; do
@@ -56,10 +79,10 @@ for deploy_id in $deployments; do
     [ ! -f "$modules_dir/$kver/vmlinuz" ] && continue
 
     vmlinuz_src="$modules_dir/$kver/vmlinuz"
-    vmlinuz_dst="$BOOT/ostree/$deploy_id/vmlinuz-$kver"
-    initramfs_dst="$BOOT/ostree/$deploy_id/initramfs-$kver.img"
+    vmlinuz_dst="$ESP/ostree/$deploy_id/vmlinuz-$kver"
+    initramfs_dst="$ESP/ostree/$deploy_id/initramfs-$kver.img"
 
-    mkdir -p "$BOOT/ostree/$deploy_id"
+    mkdir -p "$ESP/ostree/$deploy_id"
     cp -f "$vmlinuz_src" "$vmlinuz_dst"
 
     initramfs_src=""
@@ -89,7 +112,7 @@ for deploy_id in $deployments; do
     ostree_param="ostree=/ostree/boot.0/default/$deploy_id"
     cmdline="root=UUID=$ROOT_UUID rw quiet splash loglevel=3 rd.udev.log_priority=3 $ostree_param"
 
-    entry_file="$BOOT/loader/entries/ostree-$deploy_id.conf"
+    entry_file="$ESP/loader/entries/ostree-$deploy_id.conf"
     cat > "$entry_file" << BLSENTRY
 title $title ($(date +%Y-%m-%d))
 version $kver
@@ -100,7 +123,7 @@ BLSENTRY
     echo "bls-sync: entry $deploy_id kernel $kver"
 done
 
-for entry in "$BOOT/loader/entries/ostree-"*.conf; do
+for entry in "$ESP/loader/entries/ostree-"*.conf; do
     [ ! -f "$entry" ] && continue
     id=$(basename "$entry" .conf | sed 's/^ostree-//')
     found=0
@@ -108,10 +131,10 @@ for entry in "$BOOT/loader/entries/ostree-"*.conf; do
         d=$(echo "$d" | tr -d '\n\r ')
         [ "$id" = "$d" ] && found=1 && break
     done
-    [ "$found" = "0" ] && rm -f "$entry" && rm -rf "$BOOT/ostree/$id" 2>/dev/null || true
+    [ "$found" = "0" ] && rm -f "$entry" && rm -rf "$ESP/ostree/$id" 2>/dev/null || true
 done
 
-[ ! -f "$BOOT/loader/loader.conf" ] && printf "timeout 3\nconsole-mode max\ndefault @\n" > "$BOOT/loader/loader.conf"
+[ ! -f "$ESP/loader/loader.conf" ] && printf "timeout 3\nconsole-mode max\ndefault @\n" > "$ESP/loader/loader.conf"
 mount -o remount,ro "$SYSROOT" 2>/dev/null || true
 "#;
 
