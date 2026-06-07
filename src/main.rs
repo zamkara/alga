@@ -25,12 +25,94 @@ fn log_to_desktop(msg: &str) {
 }
 
 const BLS_SYNC_SCRIPT: &str = r#"
-mount -o remount,rw /sysroot 2>/dev/null || true
-ORIG=$(ostree config --repo=/sysroot/ostree/repo get sysroot.bootloader 2>/dev/null || echo none)
-ostree config --repo=/sysroot/ostree/repo set sysroot.bootloader grub2
-ostree admin bootloader-update --sysroot=/sysroot 2>/dev/null || true
-ostree config --repo=/sysroot/ostree/repo set sysroot.bootloader "$ORIG"
-mount -o remount,ro /sysroot 2>/dev/null || true
+set -euo pipefail
+SYSROOT="${SYSROOT:-/sysroot}"
+BOOT="${BOOT:-/boot}"
+OSTREE_REPO="$SYSROOT/ostree/repo"
+DEPLOY_BASE="$SYSROOT/ostree/deploy/default/deploy"
+
+[ ! -d "$OSTREE_REPO" ] && exit 0
+[ ! -d "$DEPLOY_BASE" ] && exit 0
+
+if ! touch "$SYSROOT/.ark-bls-check" 2>/dev/null; then
+    mount -o remount,rw "$SYSROOT" 2>/dev/null || true
+fi
+rm -f "$SYSROOT/.ark-bls-check" 2>/dev/null || true
+
+deployments=$(ls -d "$DEPLOY_BASE"/*/ 2>/dev/null | xargs -n1 basename 2>/dev/null || true)
+[ -z "$deployments" ] && exit 0
+
+mkdir -p "$BOOT/loader/entries" "$BOOT/ostree"
+ROOT_UUID=$(findmnt -n -o UUID "$SYSROOT" 2>/dev/null || echo "")
+
+for deploy_id in $deployments; do
+    deploy_id=$(echo "$deploy_id" | tr -d '\n\r ')
+    [ -z "$deploy_id" ] && continue
+    deploy_path="$DEPLOY_BASE/$deploy_id"
+    modules_dir="$deploy_path/usr/lib/modules"
+    [ ! -d "$modules_dir" ] && continue
+    kver=$(ls "$modules_dir" 2>/dev/null | grep -v 'extramodules' | head -1)
+    [ -z "$kver" ] && continue
+    [ ! -f "$modules_dir/$kver/vmlinuz" ] && continue
+
+    vmlinuz_src="$modules_dir/$kver/vmlinuz"
+    vmlinuz_dst="$BOOT/ostree/$deploy_id/vmlinuz-$kver"
+    initramfs_dst="$BOOT/ostree/$deploy_id/initramfs-$kver.img"
+
+    mkdir -p "$BOOT/ostree/$deploy_id"
+    cp -f "$vmlinuz_src" "$vmlinuz_dst"
+
+    initramfs_src=""
+    for candidate in \
+        "$modules_dir/$kver/initramfs.img" \
+        "$deploy_path/boot/initramfs-$kver.img" \
+        "$deploy_path/boot/initramfs-linux.img" \
+        "$deploy_path/boot/initramfs-$kver-fallback.img"; do
+        [ -f "$candidate" ] && initramfs_src="$candidate" && break
+    done
+    if [ -f "$initramfs_src" ]; then
+        cp -f "$initramfs_src" "$initramfs_dst"
+    fi
+
+    if [ ! -f "$initramfs_dst" ]; then
+        if command -v dracut >/dev/null 2>&1; then
+            dracut --force --no-hostonly --kver "$kver" --kernel-image "$vmlinuz_dst" "$initramfs_dst" 2>/dev/null || true
+        elif command -v mkinitcpio >/dev/null 2>&1; then
+            cp "$vmlinuz_src" "/boot/vmlinuz-$kver" 2>/dev/null || true
+            mkinitcpio -k "$kver" -g "$initramfs_dst" 2>/dev/null || true
+            rm -f "/boot/vmlinuz-$kver" 2>/dev/null || true
+        fi
+    fi
+    [ ! -f "$initramfs_dst" ] && continue
+
+    title=$(grep -oP '(?<=^PRETTY_NAME=).*' "$deploy_path/etc/os-release" 2>/dev/null | tr -d '"' || echo "Ark Linux")
+    ostree_param="ostree=/ostree/boot.0/default/$deploy_id"
+    cmdline="root=UUID=$ROOT_UUID rw quiet splash loglevel=3 rd.udev.log_priority=3 $ostree_param"
+
+    entry_file="$BOOT/loader/entries/ostree-$deploy_id.conf"
+    cat > "$entry_file" << BLSENTRY
+title $title ($(date +%Y-%m-%d))
+version $kver
+options $cmdline
+linux /ostree/$deploy_id/vmlinuz-$kver
+initrd /ostree/$deploy_id/initramfs-$kver.img
+BLSENTRY
+    echo "bls-sync: entry $deploy_id kernel $kver"
+done
+
+for entry in "$BOOT/loader/entries/ostree-"*.conf; do
+    [ ! -f "$entry" ] && continue
+    id=$(basename "$entry" .conf | sed 's/^ostree-//')
+    found=0
+    for d in $deployments; do
+        d=$(echo "$d" | tr -d '\n\r ')
+        [ "$id" = "$d" ] && found=1 && break
+    done
+    [ "$found" = "0" ] && rm -f "$entry" && rm -rf "$BOOT/ostree/$id" 2>/dev/null || true
+done
+
+[ ! -f "$BOOT/loader/loader.conf" ] && printf "timeout 3\nconsole-mode max\ndefault @\n" > "$BOOT/loader/loader.conf"
+mount -o remount,ro "$SYSROOT" 2>/dev/null || true
 "#;
 
 fn main() {
@@ -323,6 +405,11 @@ fn build_updater_ui(app: &Application) {
                     };
 
                     if ok {
+                        let _ = sender.send("Synchronizing bootloader entries...".to_string());
+                        let _ = tokio::process::Command::new("pkexec")
+                            .args(["bash", "-c", BLS_SYNC_SCRIPT])
+                            .output()
+                            .await;
                         let _ = sender.send("EOF_SUCCESS".to_string());
                     } else {
                         let _ = sender.send("Rolling back failed update...".to_string());
