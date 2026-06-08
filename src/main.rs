@@ -109,7 +109,7 @@ for deploy_id in $deployments; do
     [ ! -f "$initramfs_dst" ] && continue
 
     title=$(grep -oP '(?<=^PRETTY_NAME=).*' "$deploy_path/etc/os-release" 2>/dev/null | tr -d '"' || echo "Ark Linux")
-    ostree_param="ostree=/ostree/boot.0/default/$deploy_id"
+    ostree_param="ostree=$deploy_id"
     cmdline="root=UUID=$ROOT_UUID rw quiet splash loglevel=3 rd.udev.log_priority=3 $ostree_param"
 
     entry_file="$ESP/loader/entries/ostree-$deploy_id.conf"
@@ -1139,7 +1139,7 @@ fn build_ui(app: &Application) {
                                      echo 'Error: Kernel not found in /boot/ostree' && exit 1; \
                                    fi; \
                                    OSTREE_PARAM=$(grep -o 'ostree=[^ ]*' /tmp/root_mnt/boot/loader/entries/ostree-*.conf 2>/dev/null | head -n1) || true; \
-                                   [ -z \"$OSTREE_PARAM\" ] && OSTREE_PARAM=\"ostree=/ostree/boot.0/default/0\"; \
+                                   [ -z \"$OSTREE_PARAM\" ] && OSTREE_PARAM=\"ostree=0\"; \
                                    BOOT_PART_UUID=$(blkid -s UUID -o value \"$BOOT_PART\" 2>/dev/null) || true; \
                                    if [ -n \"$BOOT_PART_UUID\" ]; then \
                                      KERNEL_REL=$(echo \"$VMLINUZ\" | sed 's|/tmp/root_mnt/boot||'); \
