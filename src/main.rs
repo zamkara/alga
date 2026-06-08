@@ -109,7 +109,9 @@ for deploy_id in $deployments; do
     [ ! -f "$initramfs_dst" ] && continue
 
     title=$(grep -oP '(?<=^PRETTY_NAME=).*' "$deploy_path/etc/os-release" 2>/dev/null | tr -d '"' || echo "Ark Linux")
-    ostree_param="ostree=$deploy_id"
+    bootcsum="${deploy_id%.*}"
+    bootserial="${deploy_id##*.}"
+    ostree_param="ostree=/ostree/boot.0/default/${bootcsum}/${bootserial}"
     cmdline="root=UUID=$ROOT_UUID rw quiet splash loglevel=3 rd.udev.log_priority=3 $ostree_param"
 
     entry_file="$ESP/loader/entries/ostree-$deploy_id.conf"
