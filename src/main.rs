@@ -112,6 +112,9 @@ for deploy_id in $deployments; do
     bootcsum="${deploy_id%.*}"
     bootserial="${deploy_id##*.}"
     ostree_param="ostree=/ostree/boot.0/default/${bootcsum}/${bootserial}"
+    bootlink_dir="$SYSROOT/ostree/boot.0/default/$bootcsum"
+    mkdir -p "$bootlink_dir"
+    ln -sfn "../../../deploy/default/deploy/$deploy_id" "$bootlink_dir/$bootserial"
     cmdline="root=UUID=$ROOT_UUID rw quiet splash loglevel=3 rd.udev.log_priority=3 $ostree_param"
 
     entry_file="$ESP/loader/entries/ostree-$deploy_id.conf"
