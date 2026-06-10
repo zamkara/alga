@@ -45,10 +45,10 @@ jobs:
           makedepends=('cargo')
           source=()
           
-           build() {
-             cd /work
-             RUSTFLAGS="-C link-arg=-fuse-ld=bfd" cargo build --release --locked
-           }
+            build() {
+              cd /work
+              CFLAGS="" RUSTFLAGS="-C link-arg=-fuse-ld=bfd" cargo build --release --locked
+            }
           
           package() {
             cd /work
@@ -62,7 +62,7 @@ jobs:
           EOF
           
           sudo podman run --rm --privileged -v $(pwd):/work -v $(pwd)/pacman-cache:/var/cache/pacman/pkg -v $(pwd)/cargo-cache:/home/builduser/.cargo -w /work docker.io/archlinux:latest bash -c "
-            pacman -Syu --noconfirm base-devel sudo rust
+            pacman -Syu --noconfirm base-devel sudo rust nasm
             useradd -m builduser || true
             chown -R builduser:builduser /home/builduser
             echo 'builduser ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/builduser

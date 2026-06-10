@@ -12,7 +12,7 @@ md5sums=('SKIP')
 
 build() {
   cd "$pkgname"
-  RUSTFLAGS="-C link-arg=-fuse-ld=bfd" cargo build --release --locked
+  CFLAGS="" RUSTFLAGS="-C link-arg=-fuse-ld=bfd" cargo build --release --locked
 }
 
 package() {
