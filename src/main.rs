@@ -3,7 +3,7 @@ use libadwaita::{
     ActionRow, Application, ApplicationWindow, HeaderBar, PreferencesGroup, ToastOverlay,
 };
 use gtk::{
-    Box, Button, CheckButton, Image, Label, Orientation,
+    Box, Button, CheckButton, Image, Label, MenuButton, Orientation, Popover,
     ProgressBar, ScrolledWindow, Stack, StackTransitionType, Switch, TextView,
 };
 use std::cell::RefCell;
@@ -516,11 +516,28 @@ fn build_updater_ui(app: &Application) {
         .application(app)
         .title("Software Updater")
         .default_width(360)
-        .default_height(420)
+        .default_height(660)
         .build();
+
+    gtk::Window::set_default_icon_name("com.zamkara.alga");
 
     let main_box = Box::new(Orientation::Vertical, 0);
     let header_bar = HeaderBar::new();
+    
+    let back_btn = Button::builder()
+        .icon_name("go-previous-symbolic")
+        .visible(false)
+        .build();
+    back_btn.add_css_class("flat");
+    header_bar.pack_start(&back_btn);
+    
+    // --- Popover and Menu Button ---
+    let menu_btn = MenuButton::builder()
+        .icon_name("open-menu-symbolic")
+        .build();
+    menu_btn.add_css_class("flat");
+    header_bar.pack_end(&menu_btn);
+
     main_box.append(&header_bar);
 
     let stack = Stack::builder()
@@ -551,6 +568,7 @@ fn build_updater_ui(app: &Application) {
         }
     }));
 
+    // --- Page 1: System Update ---
     let page1_box = Box::new(Orientation::Vertical, 0);
     let content_box = Box::new(Orientation::Vertical, 18);
     content_box.set_margin_top(32);
@@ -625,51 +643,172 @@ fn build_updater_ui(app: &Application) {
     footer.append(&action_btn);
     page1_box.append(&footer);
 
-    let alga_sep = gtk::Separator::builder()
-        .orientation(Orientation::Horizontal)
-        .margin_start(24)
-        .margin_end(24)
+    stack.add_named(&page1_box, Some("page1"));
+
+    // --- Page 2: App Updater (Self Update) ---
+    let page2_box = Box::new(Orientation::Vertical, 0);
+    let content_box2 = Box::new(Orientation::Vertical, 18);
+    content_box2.set_margin_top(32);
+    content_box2.set_margin_bottom(32);
+    content_box2.set_margin_start(32);
+    content_box2.set_margin_end(32);
+    content_box2.set_vexpand(true);
+
+    let app_icon = Image::builder()
+        .icon_name("system-software-update-symbolic")
+        .pixel_size(128)
+        .halign(gtk::Align::Center)
+        .margin_bottom(12)
         .build();
-    page1_box.append(&alga_sep);
+    content_box2.append(&app_icon);
 
-    let alga_footer = Box::new(Orientation::Horizontal, 8);
-    alga_footer.set_margin_top(8);
-    alga_footer.set_margin_bottom(16);
-    alga_footer.set_margin_start(24);
-    alga_footer.set_margin_end(24);
+    let app_title = Label::builder()
+        .label("App Self-Update")
+        .css_classes(vec!["title-1".to_string()])
+        .halign(gtk::Align::Center)
+        .build();
+    content_box2.append(&app_title);
 
-    let alga_ver = Label::builder()
+    let app_ver_lbl = Label::builder()
         .label(&format!("alga v{}", ALGA_VERSION))
         .css_classes(vec!["caption".to_string()])
-        .halign(gtk::Align::Start)
-        .hexpand(true)
+        .halign(gtk::Align::Center)
         .build();
-    alga_footer.append(&alga_ver);
-
-    let alga_check_btn = Button::builder()
-        .label("Check Self-Update")
-        .css_classes(vec!["flat".to_string()])
-        .build();
-    alga_footer.append(&alga_check_btn);
-    page1_box.append(&alga_footer);
+    content_box2.append(&app_ver_lbl);
 
     let alga_status = Label::builder()
+        .label("Click Check below to scan for Alga application updates.")
+        .justify(gtk::Justification::Center)
+        .wrap(true)
+        .halign(gtk::Align::Center)
+        .build();
+    content_box2.append(&alga_status);
+    page2_box.append(&content_box2);
+
+    let footer2 = Box::new(Orientation::Horizontal, 0);
+    footer2.set_margin_top(16);
+    footer2.set_margin_bottom(24);
+    footer2.set_margin_start(24);
+    footer2.set_margin_end(24);
+
+    let alga_check_btn = Button::builder()
+        .label("Check App Update")
+        .css_classes(vec!["suggested-action".to_string()])
+        .hexpand(true)
+        .build();
+    footer2.append(&alga_check_btn);
+    page2_box.append(&footer2);
+
+    stack.add_named(&page2_box, Some("page_app_update"));
+
+    // --- Page 3: About Alga ---
+    let page3_box = Box::new(Orientation::Vertical, 0);
+    let content_box3 = Box::new(Orientation::Vertical, 12);
+    content_box3.set_margin_top(48);
+    content_box3.set_margin_bottom(32);
+    content_box3.set_margin_start(32);
+    content_box3.set_margin_end(32);
+    content_box3.set_vexpand(true);
+
+    let about_icon = Image::builder()
+        .file("/usr/share/icons/hicolor/scalable/apps/com.zamkara.alga.svg")
+        .pixel_size(96)
+        .halign(gtk::Align::Center)
+        .margin_bottom(12)
+        .build();
+    content_box3.append(&about_icon);
+
+    let about_title = Label::builder()
+        .label("Alga")
+        .css_classes(vec!["title-1".to_string()])
+        .halign(gtk::Align::Center)
+        .build();
+    content_box3.append(&about_title);
+
+    let about_ver = Label::builder()
+        .label(&format!("Version {}", ALGA_VERSION))
         .css_classes(vec!["caption".to_string()])
         .halign(gtk::Align::Center)
-        .margin_bottom(8)
         .build();
-    page1_box.append(&alga_status);
+    content_box3.append(&about_ver);
 
-    stack.add_named(&page1_box, Some("page1"));
+    let about_desc = Label::builder()
+        .label("A beautiful system installation and update frontend designed for the Ark OS project.")
+        .justify(gtk::Justification::Center)
+        .wrap(true)
+        .halign(gtk::Align::Center)
+        .build();
+    content_box3.append(&about_desc);
+
+    let dev_label = Label::builder()
+        .label("Developed by zamkara")
+        .css_classes(vec!["caption".to_string()])
+        .halign(gtk::Align::Center)
+        .margin_top(24)
+        .build();
+    content_box3.append(&dev_label);
+
+    page3_box.append(&content_box3);
+    stack.add_named(&page3_box, Some("page_about"));
 
     main_box.append(&stack);
     window.set_content(Some(&main_box));
     window.present();
 
+    // --- Menu Popover Menu Items ---
+    let popover = Popover::new();
+    let menu_vbox = Box::new(Orientation::Vertical, 6);
+    menu_vbox.set_margin_top(8);
+    menu_vbox.set_margin_bottom(8);
+    menu_vbox.set_margin_start(8);
+    menu_vbox.set_margin_end(8);
+
+    let menu_app_update_btn = Button::builder()
+        .label("Check App Update")
+        .css_classes(vec!["flat".to_string()])
+        .build();
+    let menu_about_btn = Button::builder()
+        .label("About Alga")
+        .css_classes(vec!["flat".to_string()])
+        .build();
+
+    menu_vbox.append(&menu_app_update_btn);
+    menu_vbox.append(&menu_about_btn);
+    popover.set_child(Some(&menu_vbox));
+    menu_btn.set_popover(Some(&popover));
+
+    // --- Navigation Logic ---
+    stack.connect_visible_child_notify(clone!(@weak back_btn, @weak menu_btn => move |s| {
+        let current = s.visible_child_name().unwrap_or_default().to_string();
+        let show_back = current == "page_app_update" || current == "page_about";
+        back_btn.set_visible(show_back);
+        menu_btn.set_visible(!show_back);
+    }));
+
+    back_btn.connect_clicked(clone!(@weak stack => move |_| {
+        stack.set_visible_child_name("page1");
+    }));
+
+    menu_app_update_btn.connect_clicked(clone!(@weak stack, @weak popover => move |_| {
+        popover.popdown();
+        stack.set_visible_child_name("page_app_update");
+    }));
+
+    menu_about_btn.connect_clicked(clone!(@weak stack, @weak popover => move |_| {
+        popover.popdown();
+        stack.set_visible_child_name("page_about");
+    }));
+
+    // --- State and Handlers for System Updater ---
     let state: Rc<RefCell<u8>> = Rc::new(RefCell::new(0));
 
     action_btn.connect_clicked(clone!(@weak action_btn, @weak progress_bar, @weak text_view, @weak scrolled, @weak desc, @weak icon, @strong state => move |_| {
         let s = *state.borrow();
+
+        if s == 5 {
+            let _ = std::process::Command::new("sudo").arg("reboot").status();
+            return;
+        }
 
         if s == 0 || s == 3 {
             *state.borrow_mut() = 99;
@@ -861,9 +1000,10 @@ fn build_updater_ui(app: &Application) {
         }
     }));
 
+    // --- State and Handlers for App Self-Updater ---
     let alga_update_ver: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
 
-    alga_check_btn.connect_clicked(clone!(@weak alga_check_btn, @weak alga_status, @weak alga_ver, @strong alga_update_ver => move |_| {
+    alga_check_btn.connect_clicked(clone!(@weak alga_check_btn, @weak alga_status, @strong alga_update_ver => move |_| {
         let pending = alga_update_ver.borrow().clone();
         if let Some(version) = pending {
             alga_check_btn.set_sensitive(false);
@@ -876,7 +1016,7 @@ fn build_updater_ui(app: &Application) {
                     Err(e) => { let _ = sender.send(format!("ERROR:{}", e)); }
                 }
             });
-            glib::idle_add_local(clone!(@weak alga_check_btn, @weak alga_status, @weak alga_ver, @strong alga_update_ver => @default-return glib::ControlFlow::Continue, move || {
+            glib::idle_add_local(clone!(@weak alga_check_btn, @weak alga_status, @strong alga_update_ver => @default-return glib::ControlFlow::Continue, move || {
                 while let Ok(msg) = receiver.try_recv() {
                     if msg == "DONE" {
                         alga_status.set_markup("<b>Update downloaded. Restarting...</b>");
@@ -923,7 +1063,6 @@ fn build_updater_ui(app: &Application) {
     }));
 }
 
-
 fn build_ui(app: &Application) {
     let provider = gtk::CssProvider::new();
     provider.load_from_data("
@@ -949,6 +1088,8 @@ fn build_ui(app: &Application) {
         .default_width(360)  // Very narrow wizard
         .default_height(660) // Taller to fit content
         .build();
+
+    gtk::Window::set_default_icon_name("com.zamkara.alga");
 
     let main_box = Box::new(Orientation::Vertical, 0);
     let header_bar = HeaderBar::new();
