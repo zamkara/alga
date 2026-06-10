@@ -1,15 +1,18 @@
 use libadwaita::prelude::*;
-use libadwaita::{Application, ApplicationWindow, HeaderBar, PreferencesGroup, ActionRow};
-use gtk::{
-    Box, Button, Label, Orientation, ProgressBar, ScrolledWindow, Stack, StackTransitionType,
-    TextView, CheckButton, Image, Switch,
+use libadwaita::{
+    ActionRow, Application, ApplicationWindow, HeaderBar, PreferencesGroup, ToastOverlay,
 };
-use std::process::Stdio;
-use tokio::io::{AsyncBufReadExt, BufReader};
-use glib::clone;
-use std::rc::Rc;
+use gtk::{
+    Box, Button, CheckButton, Image, Label, Orientation,
+    ProgressBar, ScrolledWindow, Stack, StackTransitionType, Switch, TextView,
+};
 use std::cell::RefCell;
 use std::env;
+use std::process::Stdio;
+use std::rc::Rc;
+use std::os::unix::process::CommandExt;
+use glib::clone;
+use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::sync::oneshot;
 
 fn log_to_desktop(msg: &str) {
@@ -22,6 +25,172 @@ fn log_to_desktop(msg: &str) {
             let _ = writeln!(file, "{}", msg);
         }
     }
+}
+
+#[allow(dead_code)]
+mod nm {
+    use gtk::gio;
+    use glib::ToVariant;
+
+    pub fn system_bus() -> gio::DBusConnection {
+        gio::bus_get_sync(gio::BusType::System, None::<&gio::Cancellable>)
+            .expect("failed to connect to system bus")
+    }
+
+    pub fn call(conn: &gio::DBusConnection, bus: &str, path: &str, iface: &str, method: &str, args: Option<&glib::Variant>) -> Result<glib::Variant, glib::Error> {
+        conn.call_sync(Some(bus), path, iface, method, args, None::<&glib::VariantTy>, gio::DBusCallFlags::NONE, -1, None::<&gio::Cancellable>)
+    }
+
+    pub fn prop_get(conn: &gio::DBusConnection, bus: &str, path: &str, iface: &str, prop: &str) -> glib::Variant {
+        let v = call(conn, bus, path, "org.freedesktop.DBus.Properties", "Get",
+            Some(&(iface, prop).to_variant())).expect("Properties.Get failed");
+        v.child_value(0).as_variant().expect("unexpected variant type")
+    }
+
+    /// Returns `true` if NM reports global connectivity (State == 70).
+    pub fn is_online() -> bool {
+        let conn = match gio::bus_get_sync(gio::BusType::System, None::<&gio::Cancellable>) {
+            Ok(c) => c,
+            Err(_) => return false,
+        };
+        let v = match call(
+            &conn,
+            "org.freedesktop.NetworkManager",
+            "/org/freedesktop/NetworkManager",
+            "org.freedesktop.DBus.Properties",
+            "Get",
+            Some(&("org.freedesktop.NetworkManager", "State").to_variant()),
+        ) {
+            Ok(v) => v,
+            Err(_) => return false,
+        };
+        // `v` is the (v) tuple from Get. Unwrap: child_value(0) → variant,
+        // then as_variant() → the inner u32 variant.
+        let state: u32 = v
+            .child_value(0)
+            .as_variant()
+            .and_then(|v| v.get::<u32>())
+            .unwrap_or(0);
+        state == 70
+    }
+}
+
+const ALGA_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+fn check_alga_update() -> Result<Option<String>, String> {
+    let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
+    rt.block_on(async {
+        let client = reqwest::Client::builder()
+            .user_agent("alga/1.0")
+            .build()
+            .map_err(|e| format!("Client error: {}", e))?;
+
+        let resp = client
+            .get("https://api.github.com/repos/zamkara/alga/releases/latest")
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {}", e))?;
+
+        if !resp.status().is_success() {
+            return Err(format!("GitHub API returned {}", resp.status()));
+        }
+
+        let text = resp.text().await.map_err(|e| format!("Read error: {}", e))?;
+        let tag = text.split("\"tag_name\":\"")
+            .nth(1)
+            .and_then(|s| s.split('\"').next())
+            .ok_or("Could not parse tag_name")?;
+        let tag_clean = tag.trim_start_matches('v');
+
+        if tag_clean == ALGA_VERSION {
+            return Ok(None);
+        }
+
+        match (semver::Version::parse(ALGA_VERSION), semver::Version::parse(tag_clean)) {
+            (Ok(current), Ok(remote)) if remote > current => Ok(Some(tag.to_string())),
+            _ => Ok(None),
+        }
+    })
+}
+
+fn download_alga_update(version: &str) -> Result<(), String> {
+    let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
+    rt.block_on(async {
+        let client = reqwest::Client::builder()
+            .user_agent("alga/1.0")
+            .build()
+            .map_err(|e| format!("Client error: {}", e))?;
+
+        let url = format!(
+            "https://github.com/zamkara/alga/releases/download/{}/alga-x86_64.tar.gz",
+            version
+        );
+        let resp = client.get(&url).send().await.map_err(|e| format!("Download error: {}", e))?;
+
+        if !resp.status().is_success() {
+            return Err(format!("Download returned {}", resp.status()));
+        }
+
+        let bytes = resp.bytes().await.map_err(|e| format!("Read error: {}", e))?;
+
+        let bin_dir = std::path::PathBuf::from("/var/lib/alga/bin");
+        let meta_dir = std::path::PathBuf::from("/var/lib/alga");
+        std::fs::create_dir_all(&bin_dir).map_err(|e| format!("Create dir error: {}", e))?;
+
+        let tar_path = bin_dir.join("alga.tar.gz");
+        std::fs::write(&tar_path, &bytes).map_err(|e| format!("Write error: {}", e))?;
+
+        let output = std::process::Command::new("tar")
+            .args(["-xzf", tar_path.to_str().unwrap(), "-C", bin_dir.to_str().unwrap()])
+            .output()
+            .map_err(|e| format!("tar error: {}", e))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let _ = std::fs::remove_file(&tar_path);
+            return Err(format!("tar extract failed: {}", stderr));
+        }
+
+        let _ = std::fs::remove_file(&tar_path);
+
+        let final_path = bin_dir.join("alga");
+        let tmp_path = bin_dir.join("alga");
+        if !tmp_path.exists() {
+            return Err("Extracted binary not found".to_string());
+        }
+
+        std::fs::rename(&tmp_path, &final_path).map_err(|e| format!("Rename error: {}", e))?;
+
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&final_path, std::fs::Permissions::from_mode(0o755))
+            .map_err(|e| format!("chmod error: {}", e))?;
+
+        let metadata = format!("{{\"version\":\"{}\",\"updated_at\":\"{}\"}}", version, chrono_now());
+        let _ = std::fs::write(meta_dir.join("current"), &metadata);
+
+        Ok(())
+    })
+}
+
+fn chrono_now() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let d = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
+    format!("{}", d.as_secs())
+}
+
+fn restart_alga() -> ! {
+    let updated = "/var/lib/alga/bin/alga";
+    let original = std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("/usr/bin/alga"));
+    let args: Vec<String> = std::env::args().collect();
+    let target = if std::path::Path::new(updated).exists() {
+        updated
+    } else {
+        original.to_str().unwrap_or("/usr/bin/alga")
+    };
+    let err = std::process::Command::new(target)
+        .args(&args[1..])
+        .exec();
+    panic!("exec failed: {}", err);
 }
 
 const BLS_SYNC_SCRIPT: &str = r#"
@@ -62,15 +231,20 @@ if ! touch "$SYSROOT/.ark-bls-check" 2>/dev/null; then
 fi
 rm -f "$SYSROOT/.ark-bls-check" 2>/dev/null || true
 
-deployments=$(ls -d "$DEPLOY_BASE"/*/ 2>/dev/null | xargs -n1 basename 2>/dev/null || true)
+deployments=$(ostree admin --sysroot="$SYSROOT" status 2>/dev/null | grep -oP 'ostree/deploy/default/deploy/\K[^ ]+' || true)
+if [ -z "$deployments" ]; then
+    deployments=$(ls -d "$DEPLOY_BASE"/*/ 2>/dev/null | xargs -n1 basename 2>/dev/null || true)
+fi
 [ -z "$deployments" ] && exit 0
 
 mkdir -p "$ESP/loader/entries" "$ESP/ostree"
 ROOT_UUID=$(findmnt -n -o UUID "$SYSROOT" 2>/dev/null || echo "")
 
+count=0
 for deploy_id in $deployments; do
     deploy_id=$(echo "$deploy_id" | tr -d '\n\r ')
     [ -z "$deploy_id" ] && continue
+    count=$((count + 1))
     deploy_path="$DEPLOY_BASE/$deploy_id"
     modules_dir="$deploy_path/usr/lib/modules"
     [ ! -d "$modules_dir" ] && continue
@@ -108,7 +282,11 @@ for deploy_id in $deployments; do
     fi
     [ ! -f "$initramfs_dst" ] && continue
 
-    title=$(grep -oP '(?<=^PRETTY_NAME=).*' "$deploy_path/etc/os-release" 2>/dev/null | tr -d '"' || echo "Ark Linux")
+    if [ "$count" -eq 1 ]; then
+        title="Arch Linux - Omega"
+    else
+        title="Arch Linux - Alpha"
+    fi
     bootcsum="${deploy_id%.*}"
     bootserial="${deploy_id##*.}"
     ostree_param="ostree=/ostree/boot.0/default/${bootcsum}/${bootserial}"
@@ -119,7 +297,7 @@ for deploy_id in $deployments; do
 
     entry_file="$ESP/loader/entries/ostree-$deploy_id.conf"
     cat > "$entry_file" << BLSENTRY
-title $title ($(date +%Y-%m-%d))
+title $title
 version $kver
 options $cmdline
 linux /ostree/$deploy_id/vmlinuz-$kver
@@ -142,6 +320,90 @@ done
 [ ! -f "$ESP/loader/loader.conf" ] && printf "timeout 3\nconsole-mode max\ndefault @\n" > "$ESP/loader/loader.conf"
 mount -o remount,ro "$SYSROOT" 2>/dev/null || true
 "#;
+
+
+
+fn build_network_page(sender: std::sync::mpsc::Sender<String>) -> (Box, Rc<dyn Fn()>) {
+    let toast_overlay = ToastOverlay::new();
+    let wrapper = Box::new(Orientation::Vertical, 0);
+
+    // ── Content: icon + text ──
+    let content = Box::new(Orientation::Vertical, 18);
+    content.set_margin_top(24);
+    content.set_margin_bottom(24);
+    content.set_margin_start(24);
+    content.set_margin_end(24);
+    content.set_vexpand(true);
+    content.set_valign(gtk::Align::Center);
+
+    let offline_icon = Image::builder()
+        .icon_name("network-wireless-offline-symbolic")
+        .pixel_size(96)
+        .halign(gtk::Align::Center)
+        .margin_bottom(24)
+        .build();
+    offline_icon.set_opacity(0.5);
+
+    let msg_label = Label::builder()
+        .label("<b>Not connected to the internet</b>")
+        .use_markup(true)
+        .halign(gtk::Align::Center)
+        .build();
+    msg_label.add_css_class("title-2");
+
+    let sub_label = Label::builder()
+        .label("Open GNOME Settings to configure Wi-Fi")
+        .halign(gtk::Align::Center)
+        .wrap(true)
+        .build();
+
+    content.append(&offline_icon);
+    content.append(&msg_label);
+    content.append(&sub_label);
+
+    // ── Footer ──
+    let footer = Box::new(Orientation::Horizontal, 0);
+    footer.set_margin_top(16);
+    footer.set_margin_bottom(24);
+    footer.set_margin_start(24);
+    footer.set_margin_end(24);
+
+    let settings_btn = Button::builder()
+        .label("Open Network Settings")
+        .hexpand(true)
+        .css_classes(["suggested-action"])
+        .build();
+
+    footer.append(&settings_btn);
+
+    // ── Assemble ──
+    let page_box = Box::new(Orientation::Vertical, 0);
+    page_box.append(&content);
+    page_box.append(&footer);
+
+    wrapper.append(&page_box);
+    toast_overlay.set_child(Some(&wrapper));
+
+    // Open Wi-Fi Settings in GNOME Control Center
+    settings_btn.connect_clicked(|_| {
+        let _ = std::process::Command::new("gnome-control-center")
+            .arg("wifi")
+            .spawn();
+    });
+
+    // Re-check connectivity every 3s to auto-advance when user connects
+    let check_sender = sender.clone();
+    glib::timeout_add_local(std::time::Duration::from_secs(3), move || {
+        if nm::is_online() {
+            let _ = check_sender.send("connected".to_string());
+        }
+        glib::ControlFlow::Continue
+    });
+
+    let trigger: Rc<dyn Fn()> = Rc::new(|| {});
+
+    (wrapper, trigger)
+}
 
 fn main() {
     // Intercept CLI arguments
@@ -175,6 +437,24 @@ fn main() {
         return;
     }
 
+    if args.len() > 1 && args[1] == "--check-update" {
+        let _ = log_to_desktop("alga: checking for self-update...");
+        match check_alga_update() {
+            Ok(Some(version)) => {
+                let msg = format!("alga {} is available", version);
+                std::process::Command::new("notify-send")
+                    .args(["Alga Update", &msg, "--icon=software-update-available"])
+                    .status()
+                    .ok();
+            }
+            Ok(None) => {}
+            Err(e) => {
+                let _ = log_to_desktop(&format!("alga check-update error: {}", e));
+            }
+        }
+        return;
+    }
+
     let is_installed_os = std::path::Path::new("/run/ostree-booted").exists();
 
     if is_installed_os {
@@ -183,6 +463,13 @@ fn main() {
             .build();
 
         app.connect_startup(|_| {
+            // Suppress Adwaita CSS deprecation warnings during init
+            glib::log_set_handler(
+                None,
+                glib::LogLevels::LEVEL_WARNING,
+                false, false,
+                |_, _, _| {},
+            );
             let _ = libadwaita::init();
         });
 
@@ -194,6 +481,12 @@ fn main() {
             .build();
 
         app.connect_startup(|_| {
+            glib::log_set_handler(
+                None,
+                glib::LogLevels::LEVEL_WARNING,
+                false, false,
+                |_, _, _| {},
+            );
             let _ = libadwaita::init();
         });
 
@@ -230,6 +523,35 @@ fn build_updater_ui(app: &Application) {
     let header_bar = HeaderBar::new();
     main_box.append(&header_bar);
 
+    let stack = Stack::builder()
+        .transition_type(StackTransitionType::SlideLeftRight)
+        .build();
+
+    let (net_sender, net_receiver) = std::sync::mpsc::channel::<String>();
+    let (net_page, net_trigger) = build_network_page(net_sender.clone());
+    stack.add_named(&net_page, Some("page0"));
+
+    glib::idle_add_local(clone!(@weak stack => @default-return glib::ControlFlow::Continue, move || {
+        while let Ok(msg) = net_receiver.try_recv() {
+            if msg == "connected" {
+                let current = stack.visible_child_name().unwrap_or_default().to_string();
+                if current == "page0" {
+                    stack.set_visible_child_name("page1");
+                    return glib::ControlFlow::Break;
+                }
+            }
+        }
+        glib::ControlFlow::Continue
+    }));
+
+    stack.connect_visible_child_notify(clone!(@weak stack, @strong net_sender, @strong net_trigger => move |s| {
+        let name = s.visible_child_name().unwrap_or_default().to_string();
+        if name == "page0" && nm::is_online() {
+            let _ = net_sender.send("connected".to_string());
+        }
+    }));
+
+    let page1_box = Box::new(Orientation::Vertical, 0);
     let content_box = Box::new(Orientation::Vertical, 18);
     content_box.set_margin_top(32);
     content_box.set_margin_bottom(32);
@@ -287,7 +609,7 @@ fn build_updater_ui(app: &Application) {
     scrolled.add_css_class("log-wrapper");
     content_box.append(&scrolled);
 
-    main_box.append(&content_box);
+    page1_box.append(&content_box);
 
     let footer = Box::new(Orientation::Horizontal, 0);
     footer.set_margin_top(16);
@@ -301,8 +623,46 @@ fn build_updater_ui(app: &Application) {
         .hexpand(true)
         .build();
     footer.append(&action_btn);
-    main_box.append(&footer);
+    page1_box.append(&footer);
 
+    let alga_sep = gtk::Separator::builder()
+        .orientation(Orientation::Horizontal)
+        .margin_start(24)
+        .margin_end(24)
+        .build();
+    page1_box.append(&alga_sep);
+
+    let alga_footer = Box::new(Orientation::Horizontal, 8);
+    alga_footer.set_margin_top(8);
+    alga_footer.set_margin_bottom(16);
+    alga_footer.set_margin_start(24);
+    alga_footer.set_margin_end(24);
+
+    let alga_ver = Label::builder()
+        .label(&format!("alga v{}", ALGA_VERSION))
+        .css_classes(vec!["caption".to_string()])
+        .halign(gtk::Align::Start)
+        .hexpand(true)
+        .build();
+    alga_footer.append(&alga_ver);
+
+    let alga_check_btn = Button::builder()
+        .label("Check Self-Update")
+        .css_classes(vec!["flat".to_string()])
+        .build();
+    alga_footer.append(&alga_check_btn);
+    page1_box.append(&alga_footer);
+
+    let alga_status = Label::builder()
+        .css_classes(vec!["caption".to_string()])
+        .halign(gtk::Align::Center)
+        .margin_bottom(8)
+        .build();
+    page1_box.append(&alga_status);
+
+    stack.add_named(&page1_box, Some("page1"));
+
+    main_box.append(&stack);
     window.set_content(Some(&main_box));
     window.present();
 
@@ -317,8 +677,7 @@ fn build_updater_ui(app: &Application) {
             action_btn.set_label("Checking...");
             desc.set_label("Checking for available system updates...");
 
-            #[allow(deprecated)]
-            let (sender, receiver) = glib::MainContext::channel(glib::Priority::DEFAULT);
+            let (sender, receiver) = std::sync::mpsc::channel::<String>();
 
             std::thread::spawn(move || {
                 let output = std::process::Command::new("pkexec")
@@ -347,31 +706,34 @@ fn build_updater_ui(app: &Application) {
                 }
             });
 
-            receiver.attach(None, clone!(@weak action_btn, @weak desc, @weak icon, @strong state => @default-return glib::ControlFlow::Break, move |msg| {
-                match msg.as_str() {
-                    "UPDATE_AVAILABLE" => {
-                        *state.borrow_mut() = 1;
-                        action_btn.set_sensitive(true);
-                        action_btn.set_label("Update Now");
-                        desc.set_label("A new system update is available. Click Update Now to install.");
-                        icon.set_file(Some("/usr/share/alga/update-available.svg"));
+            glib::idle_add_local(clone!(@weak action_btn, @weak desc, @weak icon, @strong state => @default-return glib::ControlFlow::Continue, move || {
+                while let Ok(msg) = receiver.try_recv() {
+                    match msg.as_str() {
+                        "UPDATE_AVAILABLE" => {
+                            *state.borrow_mut() = 1;
+                            action_btn.set_sensitive(true);
+                            action_btn.set_label("Update Now");
+                            desc.set_label("A new system update is available. Click Update Now to install.");
+                            icon.set_file(Some("/usr/share/alga/update-available.svg"));
+                        }
+                        "UP_TO_DATE" => {
+                            *state.borrow_mut() = 2;
+                            action_btn.set_label("Up to Date");
+                            action_btn.set_sensitive(false);
+                            desc.set_label("Your system is currently up to date.");
+                            icon.set_file(Some("/usr/share/alga/check-for-update.svg"));
+                        }
+                        "CHECK_FAILED" => {
+                            *state.borrow_mut() = 3;
+                            action_btn.set_label("Check Failed");
+                            action_btn.set_sensitive(true);
+                            desc.set_label("Unable to check for updates. Check your internet connection.");
+                        }
+                        _ => {}
                     }
-                    "UP_TO_DATE" => {
-                        *state.borrow_mut() = 2;
-                        action_btn.set_label("Up to Date");
-                        action_btn.set_sensitive(false);
-                        desc.set_label("Your system is currently up to date.");
-                        icon.set_file(Some("/usr/share/alga/check-for-update.svg"));
-                    }
-                    "CHECK_FAILED" => {
-                        *state.borrow_mut() = 3;
-                        action_btn.set_label("Check Failed");
-                        action_btn.set_sensitive(true);
-                        desc.set_label("Unable to check for updates. Check your internet connection.");
-                    }
-                    _ => {}
+                    return glib::ControlFlow::Break;
                 }
-                glib::ControlFlow::Break
+                glib::ControlFlow::Continue
             }));
         } else if s == 1 {
             *state.borrow_mut() = 4;
@@ -382,8 +744,7 @@ fn build_updater_ui(app: &Application) {
             scrolled.set_visible(true);
             text_view.set_visible(true);
 
-            #[allow(deprecated)]
-            let (sender, receiver) = glib::MainContext::channel(glib::Priority::DEFAULT);
+            let (sender, receiver) = std::sync::mpsc::channel::<String>();
 
             let buffer = text_view.buffer();
             buffer.set_text("Starting update process...\n");
@@ -455,50 +816,113 @@ fn build_updater_ui(app: &Application) {
                 });
             });
 
-            receiver.attach(None, clone!(@weak text_view, @weak progress_bar, @weak action_btn, @weak desc, @weak icon, @strong state => @default-return glib::ControlFlow::Break, move |text| {
-                if text == "EOF_SUCCESS" {
-                    *state.borrow_mut() = 5;
-                    progress_bar.set_fraction(1.0);
-                    action_btn.set_label("Reboot Now");
-                    action_btn.set_sensitive(true);
-                    desc.set_label("System update installed. Reboot to apply changes.");
-                    icon.set_file(Some("/usr/share/alga/ready-to-go.svg"));
-                    log_to_desktop("[upgrade] EOF_SUCCESS: update completed.");
-                    return glib::ControlFlow::Break;
-                } else if text == "EOF_ERROR" {
-                    *state.borrow_mut() = 6;
-                    progress_bar.set_fraction(1.0);
-                    action_btn.set_label("Update Failed");
-                    action_btn.set_sensitive(true);
-                    desc.set_label("Update encountered an error. Check the log for details.");
-                    log_to_desktop("[upgrade] EOF_ERROR: update failed.");
-                    return glib::ControlFlow::Break;
-                }
+            glib::idle_add_local(clone!(@weak text_view, @weak progress_bar, @weak action_btn, @weak desc, @weak icon, @strong state => @default-return glib::ControlFlow::Continue, move || {
+                while let Ok(text) = receiver.try_recv() {
+                    if text == "EOF_SUCCESS" {
+                        *state.borrow_mut() = 5;
+                        progress_bar.set_fraction(1.0);
+                        action_btn.set_label("Reboot Now");
+                        action_btn.set_sensitive(true);
+                        desc.set_label("System update installed. Reboot to apply changes.");
+                        icon.set_file(Some("/usr/share/alga/ready-to-go.svg"));
+                        log_to_desktop("[upgrade] EOF_SUCCESS: update completed.");
+                        return glib::ControlFlow::Break;
+                    } else if text == "EOF_ERROR" {
+                        *state.borrow_mut() = 6;
+                        progress_bar.set_fraction(1.0);
+                        action_btn.set_label("Update Failed");
+                        action_btn.set_sensitive(true);
+                        desc.set_label("Update encountered an error. Check the log for details.");
+                        log_to_desktop("[upgrade] EOF_ERROR: update failed.");
+                        return glib::ControlFlow::Break;
+                    }
 
-                if let Some(pct_pos) = text.rfind('%') {
-                    let before = &text[..pct_pos];
-                    if let Some(non_digit) = before.rfind(|c: char| !c.is_ascii_digit()) {
-                        if let Ok(pct) = before[non_digit + 1..].parse::<f64>() {
+                    if let Some(pct_pos) = text.rfind('%') {
+                        let before = &text[..pct_pos];
+                        if let Some(non_digit) = before.rfind(|c: char| !c.is_ascii_digit()) {
+                            if let Ok(pct) = before[non_digit + 1..].parse::<f64>() {
+                                progress_bar.set_fraction(pct / 100.0);
+                            }
+                        } else if let Ok(pct) = before.parse::<f64>() {
                             progress_bar.set_fraction(pct / 100.0);
                         }
-                    } else if let Ok(pct) = before.parse::<f64>() {
-                        progress_bar.set_fraction(pct / 100.0);
                     }
+
+                    log_to_desktop(&format!("[upgrade] {}", text));
+                    let buffer = text_view.buffer();
+                    let mut end_iter = buffer.end_iter();
+                    buffer.insert(&mut end_iter, &format!("{}\n", text));
+
+                    let mark = buffer.create_mark(None, &buffer.end_iter(), false);
+                    text_view.scroll_to_mark(&mark, 0.0, false, 0.0, 1.0);
                 }
+                glib::ControlFlow::Continue
+            }));
+        }
+    }));
 
-                log_to_desktop(&format!("[upgrade] {}", text));
-                let buffer = text_view.buffer();
-                let mut end_iter = buffer.end_iter();
-                buffer.insert(&mut end_iter, &format!("{}\n", text));
+    let alga_update_ver: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
 
-                let mark = buffer.create_mark(None, &buffer.end_iter(), false);
-                text_view.scroll_to_mark(&mark, 0.0, false, 0.0, 1.0);
-
+    alga_check_btn.connect_clicked(clone!(@weak alga_check_btn, @weak alga_status, @weak alga_ver, @strong alga_update_ver => move |_| {
+        let pending = alga_update_ver.borrow().clone();
+        if let Some(version) = pending {
+            alga_check_btn.set_sensitive(false);
+            alga_status.set_label(&format!("Downloading v{}...", version));
+            let (sender, receiver) = std::sync::mpsc::channel::<String>();
+            let ver = version.clone();
+            std::thread::spawn(move || {
+                match download_alga_update(&ver) {
+                    Ok(_) => { let _ = sender.send("DONE".to_string()); }
+                    Err(e) => { let _ = sender.send(format!("ERROR:{}", e)); }
+                }
+            });
+            glib::idle_add_local(clone!(@weak alga_check_btn, @weak alga_status, @weak alga_ver, @strong alga_update_ver => @default-return glib::ControlFlow::Continue, move || {
+                while let Ok(msg) = receiver.try_recv() {
+                    if msg == "DONE" {
+                        alga_status.set_markup("<b>Update downloaded. Restarting...</b>");
+                        restart_alga();
+                    } else if let Some(err) = msg.strip_prefix("ERROR:") {
+                        alga_status.set_label(&format!("Download failed: {}", err));
+                        alga_check_btn.set_label("Retry");
+                        alga_check_btn.set_sensitive(true);
+                    }
+                    return glib::ControlFlow::Break;
+                }
+                glib::ControlFlow::Continue
+            }));
+        } else {
+            alga_check_btn.set_sensitive(false);
+            alga_status.set_label("Checking for alga updates...");
+            let (sender, receiver) = std::sync::mpsc::channel::<String>();
+            std::thread::spawn(move || {
+                match check_alga_update() {
+                    Ok(Some(version)) => { let _ = sender.send(format!("AVAILABLE:{}", version)); }
+                    Ok(None) => { let _ = sender.send("UP_TO_DATE".to_string()); }
+                    Err(e) => { let _ = sender.send(format!("ERROR:{}", e)); }
+                }
+            });
+            glib::idle_add_local(clone!(@weak alga_check_btn, @weak alga_status, @strong alga_update_ver => @default-return glib::ControlFlow::Continue, move || {
+                while let Ok(msg) = receiver.try_recv() {
+                    if msg == "UP_TO_DATE" {
+                        alga_status.set_label("Already up to date");
+                        alga_check_btn.set_sensitive(true);
+                    } else if let Some(ver) = msg.strip_prefix("AVAILABLE:") {
+                        *alga_update_ver.borrow_mut() = Some(ver.to_string());
+                        alga_status.set_markup(&format!("<b>Update available: v{}</b>", ver));
+                        alga_check_btn.set_label("Update Alga");
+                        alga_check_btn.set_sensitive(true);
+                    } else if let Some(err) = msg.strip_prefix("ERROR:") {
+                        alga_status.set_label(&format!("Check failed: {}", err));
+                        alga_check_btn.set_sensitive(true);
+                    }
+                    return glib::ControlFlow::Break;
+                }
                 glib::ControlFlow::Continue
             }));
         }
     }));
 }
+
 
 fn build_ui(app: &Application) {
     let provider = gtk::CssProvider::new();
@@ -633,7 +1057,30 @@ fn build_ui(app: &Application) {
     page1_box.append(&footer1);
     stack.add_named(&page1_box, Some("page1"));
 
-    // --- Page 2: System Configuration ---
+    let (net_sender, net_receiver) = std::sync::mpsc::channel::<String>();
+    let (net_page, net_trigger) = build_network_page(net_sender.clone());
+    stack.add_named(&net_page, Some("page2"));
+
+    glib::idle_add_local(clone!(@weak stack => @default-return glib::ControlFlow::Continue, move || {
+        while let Ok(msg) = net_receiver.try_recv() {
+            if msg == "connected" {
+                let current = stack.visible_child_name().unwrap_or_default().to_string();
+                if current == "page2" {
+                    stack.set_visible_child_name("page3");
+                }
+            }
+        }
+        glib::ControlFlow::Continue
+    }));
+
+    stack.connect_visible_child_notify(clone!(@weak stack, @strong net_sender, @strong net_trigger => move |s| {
+        let name = s.visible_child_name().unwrap_or_default().to_string();
+        if name == "page2" && nm::is_online() {
+            let _ = net_sender.send("connected".to_string());
+        }
+    }));
+
+    // --- Page 3: System Configuration ---
     let page2_box = Box::new(Orientation::Vertical, 0);
     let content2 = Box::new(Orientation::Vertical, 12);
     content2.set_margin_top(24);
@@ -707,7 +1154,7 @@ fn build_ui(app: &Application) {
     let next_btn2 = Button::builder().label("Next").css_classes(["suggested-action"]).hexpand(true).build();
     footer2.append(&next_btn2);
     page2_box.append(&footer2);
-    stack.add_named(&page2_box, Some("page2"));
+    stack.add_named(&page2_box, Some("page3"));
 
     // --- Page 3: Detailed Confirmation ---
     let page3_box = Box::new(Orientation::Vertical, 0);
@@ -775,9 +1222,9 @@ fn build_ui(app: &Application) {
         erase_btn3.set_sensitive(cb.is_active());
     }));
     
-    stack.add_named(&page3_box, Some("page3"));
+    stack.add_named(&page3_box, Some("page4"));
 
-    // --- Page 4: Progress (Rounded Log Window) ---
+    // --- Page 5: Progress (Rounded Log Window) ---
     let page4_box = Box::new(Orientation::Vertical, 0);
     let content4 = Box::new(Orientation::Vertical, 18);
     content4.set_margin_top(24);
@@ -824,9 +1271,9 @@ fn build_ui(app: &Application) {
     footer4.append(&cancel_btn);
     page4_box.append(&footer4);
     
-    stack.add_named(&page4_box, Some("page4"));
+    stack.add_named(&page4_box, Some("page5"));
 
-    // --- Page 5: Success ---
+    // --- Page 6: Success ---
     let page5_box = Box::new(Orientation::Vertical, 0);
     let content5 = Box::new(Orientation::Vertical, 18);
     content5.set_margin_top(24);
@@ -866,13 +1313,13 @@ fn build_ui(app: &Application) {
     footer5.append(&stay_btn);
     footer5.append(&reboot_btn);
     page5_box.append(&footer5);
-    stack.add_named(&page5_box, Some("page5"));
+    stack.add_named(&page5_box, Some("page6"));
 
     // --- Navigation Logic ---
     
     stack.connect_visible_child_notify(clone!(@weak back_btn => move |s| {
         let current = s.visible_child_name().unwrap_or_default();
-        back_btn.set_visible(current == "page2" || current == "page3");
+        back_btn.set_visible(current == "page2" || current == "page3" || current == "page4");
     }));
 
     back_btn.connect_clicked(clone!(@weak stack => move |_| {
@@ -880,7 +1327,9 @@ fn build_ui(app: &Application) {
         if current == "page2" {
             stack.set_visible_child_name("page1");
         } else if current == "page3" {
-            stack.set_visible_child_name("page2");
+            stack.set_visible_child_name("page1");
+        } else if current == "page4" {
+            stack.set_visible_child_name("page3");
         }
     }));
     
@@ -924,7 +1373,7 @@ fn build_ui(app: &Application) {
             _ => "auto".to_string(),
         };
         
-        stack.set_visible_child_name("page3");
+        stack.set_visible_child_name("page4");
     }));
     
     cancel_btn.connect_clicked(clone!(@strong cancel_sender, @weak stack, @weak cancel_btn => move |_| {
@@ -956,7 +1405,7 @@ fn build_ui(app: &Application) {
             }
         }
 
-        stack.set_visible_child_name("page4");
+        stack.set_visible_child_name("page5");
         cancel_btn.set_visible(true);
         cancel_btn.set_label("Cancel Install");
         cancel_btn.add_css_class("destructive-action");
@@ -972,62 +1421,62 @@ fn build_ui(app: &Application) {
         let variant = target_variant.borrow().clone();
         let zram_val = target_zram.borrow().clone();
         
-        #[allow(deprecated)]
-        let (sender, receiver) = glib::MainContext::channel(glib::Priority::DEFAULT);
+        let (sender, receiver) = std::sync::mpsc::channel::<String>();
         let (kill_tx, mut kill_rx) = oneshot::channel::<()>();
         *cancel_sender.borrow_mut() = Some(kill_tx);
         
-        receiver.attach(None, clone!(@weak text_view, @weak progress_bar, @weak stack, @weak cancel_btn, @weak title4, @strong cancel_sender, @strong pulse_timeout => @default-return glib::ControlFlow::Break, move |msg: String| {
-            // Append raw log line to ~/Desktop/log.txt
-            if let Ok(home) = std::env::var("HOME") {
-                let desktop_log = std::path::PathBuf::from(home).join("Desktop").join("log.txt");
-                if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(&desktop_log) {
-                    use std::io::Write;
-                    let _ = writeln!(file, "{}", msg);
+        glib::idle_add_local(clone!(@weak text_view, @weak progress_bar, @weak stack, @weak cancel_btn, @weak title4, @strong cancel_sender, @strong pulse_timeout => @default-return glib::ControlFlow::Continue, move || {
+            while let Ok(msg) = receiver.try_recv() {
+                // Append raw log line to ~/Desktop/log.txt
+                if let Ok(home) = std::env::var("HOME") {
+                    let desktop_log = std::path::PathBuf::from(home).join("Desktop").join("log.txt");
+                    if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(&desktop_log) {
+                        use std::io::Write;
+                        let _ = writeln!(file, "{}", msg);
+                    }
                 }
-            }
 
-            if msg.starts_with("EOF_") {
-                if let Some(id) = pulse_timeout.borrow_mut().take() {
-                    id.remove();
+                if msg.starts_with("EOF_") {
+                    if let Some(id) = pulse_timeout.borrow_mut().take() {
+                        id.remove();
+                    }
                 }
-            }
-            
-            if msg == "EOF_SUCCESS" {
-                stack.set_visible_child_name("page5");
-                return glib::ControlFlow::Break;
-            } else if msg == "EOF_CANCEL" {
-                text_view.buffer().insert(&mut text_view.buffer().end_iter(), "\n[Installation Cancelled]\n");
-                stack.set_visible_child_name("page1"); 
-                return glib::ControlFlow::Break;
-            } else if msg == "EOF_ERROR" {
-                progress_bar.add_css_class("error");
                 
-                let _ = cancel_sender.borrow_mut().take();
-                cancel_btn.set_label("Back to Menu");
-                cancel_btn.remove_css_class("destructive-action");
-                cancel_btn.add_css_class("suggested-action");
+                if msg == "EOF_SUCCESS" {
+                    stack.set_visible_child_name("page6");
+                    return glib::ControlFlow::Break;
+                } else if msg == "EOF_CANCEL" {
+                    text_view.buffer().insert(&mut text_view.buffer().end_iter(), "\n[Installation Cancelled]\n");
+                    stack.set_visible_child_name("page1"); 
+                    return glib::ControlFlow::Break;
+                } else if msg == "EOF_ERROR" {
+                    progress_bar.add_css_class("error");
+                    
+                    let _ = cancel_sender.borrow_mut().take();
+                    cancel_btn.set_label("Back to Menu");
+                    cancel_btn.remove_css_class("destructive-action");
+                    cancel_btn.add_css_class("suggested-action");
+                    
+                    text_view.buffer().insert(&mut text_view.buffer().end_iter(), "\n[Installation Failed]\n");
+                    return glib::ControlFlow::Break;
+                }
                 
-                text_view.buffer().insert(&mut text_view.buffer().end_iter(), "\n[Installation Failed]\n");
-                return glib::ControlFlow::Break;
+                let (pct, clean_msg) = match sanitize_log(&msg) {
+                    Some((p, m)) => (p, m),
+                    None => continue,
+                };
+                
+                if let Some(p) = pct {
+                    title4.set_label(&format!("<b>{}% Installing...</b>", p));
+                }
+                
+                let buffer = text_view.buffer();
+                let mut iter = buffer.end_iter();
+                buffer.insert(&mut iter, &format!("{}\n", clean_msg));
+                
+                let mark = buffer.create_mark(None, &buffer.end_iter(), false);
+                text_view.scroll_to_mark(&mark, 0.0, false, 0.0, 0.0);
             }
-            
-            let (pct, clean_msg) = match sanitize_log(&msg) {
-                Some((p, m)) => (p, m),
-                None => return glib::ControlFlow::Continue,
-            };
-            
-            if let Some(p) = pct {
-                title4.set_label(&format!("<b>{}% Installing...</b>", p));
-            }
-            
-            let buffer = text_view.buffer();
-            let mut iter = buffer.end_iter();
-            buffer.insert(&mut iter, &format!("{}\n", clean_msg));
-            
-            let mark = buffer.create_mark(None, &buffer.end_iter(), false);
-            text_view.scroll_to_mark(&mark, 0.0, false, 0.0, 0.0);
-            
             glib::ControlFlow::Continue
         }));
         
@@ -1152,7 +1601,7 @@ fn build_ui(app: &Application) {
                                      {{ \
                                        echo 'set default=0'; \
                                        echo 'set timeout=5'; \
-                                       echo 'menuentry \"Arch Linux\" {{'; \
+                                       echo 'menuentry \"Arch Linux - Alpha\" {{'; \
                                        echo '    search --no-floppy --fs-uuid '\"$ROOT_UUID\"' --set=root'; \
                                        echo '    search --no-floppy --fs-uuid '\"$BOOT_PART_UUID\"' --set=boot_root'; \
                                        echo '    linux ($boot_root)'\"$KERNEL_REL\"' root=UUID='\"$ROOT_UUID\"' rw quiet splash loglevel=3 rd.udev.log_priority=3 vt.global_cursor_default=0 '\"$OSTREE_PARAM\"''; \
@@ -1165,7 +1614,7 @@ fn build_ui(app: &Application) {
                                      {{ \
                                        echo 'set default=0'; \
                                        echo 'set timeout=5'; \
-                                       echo 'menuentry \"Arch Linux\" {{'; \
+                                       echo 'menuentry \"Arch Linux - Alpha\" {{'; \
                                        echo '    search --no-floppy --fs-uuid '\"$ROOT_UUID\"' --set=root'; \
                                        echo '    linux '\"$KERNEL_REL\"' root=UUID='\"$ROOT_UUID\"' rw quiet splash loglevel=3 rd.udev.log_priority=3 vt.global_cursor_default=0 '\"$OSTREE_PARAM\"''; \
                                        echo '    initrd '\"$INIT_REL\"''; \

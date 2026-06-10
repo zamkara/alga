@@ -3,7 +3,7 @@
 Name=Ark Wizard
 GenericName=System Installer
 Comment=Install Ark Linux to your system
-Exec=alga
+Exec=/usr/local/bin/alga
 Icon=/usr/share/icons/MoreWaita/scalable/devices/drive-harddisk-solidstate.svg
 Terminal=false
 Type=Application

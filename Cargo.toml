@@ -8,3 +8,5 @@ gtk = { package = "gtk4", version = "0.7" }
 libadwaita = "0.5"
 glib = "0.18"
 tokio = { version = "1.35", features = ["full"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+semver = "1.0"
