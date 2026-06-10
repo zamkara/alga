@@ -202,27 +202,15 @@ DEPLOY_BASE="$SYSROOT/ostree/deploy/default/deploy"
 [ ! -d "$OSTREE_REPO" ] && exit 0
 [ ! -d "$DEPLOY_BASE" ] && exit 0
 
-# Cari EFI System Partition — systemd-boot cuma baca dari sini
-ESP=""
-for candidate in "/boot" "/efi" "/boot/efi"; do
-    if mountpoint -q "$candidate" 2>/dev/null && df -T "$candidate" 2>/dev/null | grep -q vfat; then
-        ESP="$candidate"
-        break
-    fi
-done
+ESP="${ESP:-}"
 if [ -z "$ESP" ]; then
-    ESP_DEV=""
-    if command -v blkid >/dev/null 2>&1 && blkid -L EFI-SYSTEM >/dev/null 2>&1; then
-        ESP_DEV=$(blkid -L EFI-SYSTEM 2>/dev/null)
-    fi
-    if [ -z "$ESP_DEV" ] && command -v lsblk >/dev/null 2>&1; then
-        ESP_DEV=$(lsblk -o NAME,FSTYPE,LABEL -rn 2>/dev/null | awk '$2 == "vfat" && $3 == "EFI-SYSTEM" {print "/dev/"$1}' | head -1)
-    fi
-    if [ -n "$ESP_DEV" ]; then
-        ESP="/mnt/esp"
-        mkdir -p "$ESP" 2>/dev/null
-        mount "$ESP_DEV" "$ESP" 2>/dev/null || ESP=""
-    fi
+    # Cari EFI System Partition — systemd-boot cuma baca dari sini
+    for candidate in "/boot" "/efi" "/boot/efi"; do
+        if mountpoint -q "$candidate" 2>/dev/null && df -T "$candidate" 2>/dev/null | grep -q vfat; then
+            ESP="$candidate"
+            break
+        fi
+    done
 fi
 [ -z "$ESP" ] && exit 0
 
@@ -282,11 +270,8 @@ for deploy_id in $deployments; do
     fi
     [ ! -f "$initramfs_dst" ] && continue
 
-    if [ "$count" -eq 1 ]; then
-        title="Arch Linux - Omega"
-    else
-        title="Arch Linux - Alpha"
-    fi
+    deploy_date=$(date -r "$deploy_path" "+%Y%m%d" 2>/dev/null || date "+%Y%m%d")
+    title="Arch Linux $deploy_date"
     bootcsum="${deploy_id%.*}"
     bootserial="${deploy_id##*.}"
     ostree_param="ostree=/ostree/boot.0/default/${bootcsum}/${bootserial}"
@@ -316,6 +301,10 @@ for entry in "$ESP/loader/entries/ostree-"*.conf; do
     done
     [ "$found" = "0" ] && rm -f "$entry" && rm -rf "$ESP/ostree/$id" 2>/dev/null || true
 done
+
+# Hapus entry bawaan ostree/bootc agar tidak ganda
+rm -f "$ESP/loader/entries/ostree-default-"*.conf 2>/dev/null || true
+rm -f "$ESP/loader/entries/ostree-"*-default.conf 2>/dev/null || true
 
 [ ! -f "$ESP/loader/loader.conf" ] && printf "timeout 3\nconsole-mode max\ndefault @\n" > "$ESP/loader/loader.conf"
 mount -o remount,ro "$SYSROOT" 2>/dev/null || true
@@ -1794,11 +1783,10 @@ fn build_ui(app: &Application) {
                                  mkdir -p /tmp/efi_mnt/loader/entries; \
                                  cp /tmp/root_mnt/boot/loader/entries/*.conf /tmp/efi_mnt/loader/entries/ 2>/dev/null || true; \
                                  sed -i 's|/boot/ostree|/ostree|g' /tmp/efi_mnt/loader/entries/*.conf 2>/dev/null || true; \
+                                 rm -f /tmp/efi_mnt/loader/entries/ostree-default-*.conf 2>/dev/null || true; \
+                                 rm -f /tmp/efi_mnt/loader/entries/ostree-*-default.conf 2>/dev/null || true; \
                                fi; \
-                             fi; \
-                             umount -l /tmp/efi_mnt 2>/dev/null || true; \
-                             umount -l /tmp/root_mnt/boot 2>/dev/null || true; \
-                             umount -l /tmp/root_mnt 2>/dev/null || true",
+                             fi;",
                             disk = disk,
                             grub = if install_grub { "true" } else { "false" }
                         );
@@ -1806,6 +1794,24 @@ fn build_ui(app: &Application) {
                             .args(["bash", "-c", &bootloader_cmd])
                             .output()
                             .await;
+
+                        if !install_grub {
+                            let _ = tokio::process::Command::new("pkexec")
+                                .args(["bash", "-c", BLS_SYNC_SCRIPT])
+                                .env("SYSROOT", "/tmp/root_mnt")
+                                .env("ESP", "/tmp/efi_mnt")
+                                .output()
+                                .await;
+                        }
+
+                        let unmount_cmd = "umount -l /tmp/efi_mnt 2>/dev/null || true; \
+                                           umount -l /tmp/root_mnt/boot 2>/dev/null || true; \
+                                           umount -l /tmp/root_mnt 2>/dev/null || true";
+                        let _ = tokio::process::Command::new("pkexec")
+                            .args(["bash", "-c", unmount_cmd])
+                            .output()
+                            .await;
+
                         let _ = sender.send("EOF_SUCCESS".to_string());
                     },
                     _ => {
