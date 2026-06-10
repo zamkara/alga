@@ -45,10 +45,10 @@ jobs:
           makedepends=('cargo')
           source=()
           
-          build() {
-            cd /work
-            cargo build --release --locked
-          }
+           build() {
+             cd /work
+             RUSTFLAGS="-C link-arg=-fuse-ld=bfd" cargo build --release --locked
+           }
           
           package() {
             cd /work
