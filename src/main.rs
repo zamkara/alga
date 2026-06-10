@@ -976,15 +976,30 @@ fn build_updater_ui(app: &Application) {
                         return glib::ControlFlow::Break;
                     }
 
-                    if let Some(pct_pos) = text.rfind('%') {
-                        let before = &text[..pct_pos];
-                        if let Some(non_digit) = before.rfind(|c: char| !c.is_ascii_digit()) {
-                            if let Ok(pct) = before[non_digit + 1..].parse::<f64>() {
-                                progress_bar.set_fraction(pct / 100.0);
-                            }
-                        } else if let Ok(pct) = before.parse::<f64>() {
-                            progress_bar.set_fraction(pct / 100.0);
-                        }
+                    // Smooth progress mapping based on typical bootc upgrade phase output logs
+                    let lower_text = text.to_lowercase();
+                    let current_frac = progress_bar.fraction();
+                    let mut target_frac = current_frac;
+
+                    if lower_text.contains("pulling") || lower_text.contains("receiving") || lower_text.contains("downloading") {
+                        if current_frac < 0.2 { target_frac = 0.2; }
+                    } else if lower_text.contains("preparing") || lower_text.contains("checking") {
+                        if current_frac < 0.4 { target_frac = 0.4; }
+                    } else if lower_text.contains("writing") || lower_text.contains("copying") {
+                        if current_frac < 0.6 { target_frac = 0.6; }
+                    } else if lower_text.contains("staging") || lower_text.contains("staged") {
+                        if current_frac < 0.8 { target_frac = 0.8; }
+                    } else if lower_text.contains("synchronizing") || lower_text.contains("bootloader") {
+                        if current_frac < 0.9 { target_frac = 0.9; }
+                    }
+
+                    // Increment in smooth 10% (0.1) steps towards target or slightly tick forward
+                    if target_frac > current_frac {
+                        let step = (target_frac - current_frac).min(0.1);
+                        progress_bar.set_fraction(current_frac + step);
+                    } else if current_frac < 0.9 {
+                        // Small micro-progress ticks (0.5%) per log line to keep movement alive
+                        progress_bar.set_fraction(current_frac + 0.005);
                     }
 
                     log_to_desktop(&format!("[upgrade] {}", text));
