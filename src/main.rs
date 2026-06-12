@@ -652,7 +652,7 @@ fn build_updater_ui(app: &Application) {
     content_box3.append(&about_icon);
 
     let about_title = Label::builder()
-        .label("Alga")
+        .label("Ark Wizard")
         .css_classes(vec!["title-1".to_string()])
         .halign(gtk::Align::Center)
         .build();
@@ -667,39 +667,62 @@ fn build_updater_ui(app: &Application) {
 
     let about_desc = Label::builder()
         .label("Atomic deployment and update gateway to immutable Arch Linux built using Rust and GTK4/Libadwaita")
+        .css_classes(vec!["monospace".to_string()])
         .justify(gtk::Justification::Center)
         .wrap(true)
         .halign(gtk::Align::Center)
+        .margin_bottom(18)
         .build();
     content_box3.append(&about_desc);
 
-    // --- App Self-Update inside About ---
-    let alga_status = Label::builder()
-        .label("Click Check below to scan for Alga application updates.")
-        .justify(gtk::Justification::Center)
-        .wrap(true)
-        .halign(gtk::Align::Center)
-        .margin_top(16)
+    let pref_group = PreferencesGroup::builder()
         .build();
-    content_box3.append(&alga_status);
+
+    let dev_row = ActionRow::builder()
+        .title("Maintainer")
+        .subtitle("zamkara")
+        .build();
+    pref_group.add(&dev_row);
+
+    let website_row = ActionRow::builder()
+        .title("Website")
+        .subtitle("github.com/zamkara/alga")
+        .activatable(true)
+        .build();
+    let link_icon = Image::builder()
+        .icon_name("window-new-symbolic")
+        .build();
+    website_row.add_suffix(&link_icon);
+    website_row.connect_activated(move |_| {
+        let _ = std::process::Command::new("xdg-open")
+            .arg("https://github.com/zamkara/alga")
+            .spawn();
+    });
+    pref_group.add(&website_row);
+
+    let license_row = ActionRow::builder()
+        .title("License")
+        .subtitle("GPL-3.0-only")
+        .build();
+    pref_group.add(&license_row);
+
+    content_box3.append(&pref_group);
+
+    let footer3 = Box::new(Orientation::Horizontal, 0);
+    footer3.set_margin_top(16);
+    footer3.set_margin_bottom(24);
+    footer3.set_margin_start(24);
+    footer3.set_margin_end(24);
 
     let alga_check_btn = Button::builder()
-        .label("Check App Update")
+        .label("Sync Update")
         .css_classes(vec!["suggested-action".to_string()])
-        .halign(gtk::Align::Center)
-        .margin_top(8)
+        .hexpand(true)
         .build();
-    content_box3.append(&alga_check_btn);
-
-    let dev_label = Label::builder()
-        .label("Developed by zamkara")
-        .css_classes(vec!["caption".to_string()])
-        .halign(gtk::Align::Center)
-        .margin_top(24)
-        .build();
-    content_box3.append(&dev_label);
+    footer3.append(&alga_check_btn);
 
     page3_box.append(&content_box3);
+    page3_box.append(&footer3);
     stack.add_named(&page3_box, Some("page_about"));
 
     main_box.append(&stack);
@@ -708,11 +731,11 @@ fn build_updater_ui(app: &Application) {
 
     // --- Menu Popover Menu Items ---
     let popover = Popover::new();
-    let menu_vbox = Box::new(Orientation::Vertical, 6);
-    menu_vbox.set_margin_top(8);
-    menu_vbox.set_margin_bottom(8);
-    menu_vbox.set_margin_start(8);
-    menu_vbox.set_margin_end(8);
+    let menu_vbox = Box::new(Orientation::Vertical, 2);
+    menu_vbox.set_margin_top(4);
+    menu_vbox.set_margin_bottom(4);
+    menu_vbox.set_margin_start(4);
+    menu_vbox.set_margin_end(4);
 
     let menu_about_btn = Button::builder()
         .label("About App")
@@ -724,11 +747,16 @@ fn build_updater_ui(app: &Application) {
     menu_btn.set_popover(Some(&popover));
 
     // --- Navigation Logic ---
-    stack.connect_visible_child_notify(clone!(@weak back_btn, @weak menu_btn => move |s| {
+    stack.connect_visible_child_notify(clone!(@weak window, @weak back_btn, @weak menu_btn => move |s| {
         let current = s.visible_child_name().unwrap_or_default().to_string();
         let show_back = current == "page_about";
         back_btn.set_visible(show_back);
         menu_btn.set_visible(!show_back);
+        if show_back {
+            window.set_title(Some("About App"));
+        } else {
+            window.set_title(Some("Software Updater"));
+        }
     }));
 
     back_btn.connect_clicked(clone!(@weak stack => move |_| {
@@ -959,11 +987,11 @@ fn build_updater_ui(app: &Application) {
     // --- State and Handlers for App Self-Updater ---
     let alga_update_ver: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
 
-    alga_check_btn.connect_clicked(clone!(@weak alga_check_btn, @weak alga_status, @strong alga_update_ver => move |_| {
+    alga_check_btn.connect_clicked(clone!(@weak alga_check_btn, @weak about_ver, @strong alga_update_ver => move |_| {
         let pending = alga_update_ver.borrow().clone();
         if let Some(version) = pending {
             alga_check_btn.set_sensitive(false);
-            alga_status.set_label(&format!("Downloading v{}...", version));
+            about_ver.set_label(&format!("Downloading v{}...", version));
             let (sender, receiver) = std::sync::mpsc::channel::<String>();
             let ver = version.clone();
             std::thread::spawn(move || {
@@ -972,13 +1000,13 @@ fn build_updater_ui(app: &Application) {
                     Err(e) => { let _ = sender.send(format!("ERROR:{}", e)); }
                 }
             });
-            glib::idle_add_local(clone!(@weak alga_check_btn, @weak alga_status, @strong alga_update_ver => @default-return glib::ControlFlow::Continue, move || {
+            glib::idle_add_local(clone!(@weak alga_check_btn, @weak about_ver, @strong alga_update_ver => @default-return glib::ControlFlow::Continue, move || {
                 while let Ok(msg) = receiver.try_recv() {
                     if msg == "DONE" {
-                        alga_status.set_markup("<b>Update downloaded. Restarting...</b>");
+                        about_ver.set_label("Update downloaded. Restarting...");
                         restart_alga();
                     } else if let Some(err) = msg.strip_prefix("ERROR:") {
-                        alga_status.set_label(&format!("Download failed: {}", err));
+                        about_ver.set_label(&format!("Download failed: {}", err));
                         alga_check_btn.set_label("Retry");
                         alga_check_btn.set_sensitive(true);
                     }
@@ -988,7 +1016,7 @@ fn build_updater_ui(app: &Application) {
             }));
         } else {
             alga_check_btn.set_sensitive(false);
-            alga_status.set_label("Checking for alga updates...");
+            about_ver.set_label("Checking for alga updates...");
             let (sender, receiver) = std::sync::mpsc::channel::<String>();
             std::thread::spawn(move || {
                 match check_alga_update() {
@@ -997,18 +1025,18 @@ fn build_updater_ui(app: &Application) {
                     Err(e) => { let _ = sender.send(format!("ERROR:{}", e)); }
                 }
             });
-            glib::idle_add_local(clone!(@weak alga_check_btn, @weak alga_status, @strong alga_update_ver => @default-return glib::ControlFlow::Continue, move || {
+            glib::idle_add_local(clone!(@weak alga_check_btn, @weak about_ver, @strong alga_update_ver => @default-return glib::ControlFlow::Continue, move || {
                 while let Ok(msg) = receiver.try_recv() {
                     if msg == "UP_TO_DATE" {
-                        alga_status.set_label("Already up to date");
+                        about_ver.set_label(&format!("Version {} (Already up to date)", ALGA_VERSION));
                         alga_check_btn.set_sensitive(true);
                     } else if let Some(ver) = msg.strip_prefix("AVAILABLE:") {
                         *alga_update_ver.borrow_mut() = Some(ver.to_string());
-                        alga_status.set_markup(&format!("<b>Update available: v{}</b>", ver));
+                        about_ver.set_label(&format!("Update available: v{}", ver));
                         alga_check_btn.set_label("Update Alga");
                         alga_check_btn.set_sensitive(true);
                     } else if let Some(err) = msg.strip_prefix("ERROR:") {
-                        alga_status.set_label(&format!("Check failed: {}", err));
+                        about_ver.set_label(&format!("Check failed: {}", err));
                         alga_check_btn.set_sensitive(true);
                     }
                     return glib::ControlFlow::Break;
