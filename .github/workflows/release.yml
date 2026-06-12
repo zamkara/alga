@@ -37,7 +37,7 @@ jobs:
           pkgname=alga
           pkgver=1.0.0
           pkgrel=${{ github.run_number }}
-          pkgdesc="A GTK4/Libadwaita frontend for bootc operations"
+          pkgdesc="Atomic deployment and update gateway to immutable Arch Linux built using Rust and GTK4/Libadwaita"
           arch=('x86_64')
           url="https://github.com/zamkara/alga"
           license=('MIT')

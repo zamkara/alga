@@ -1,7 +1,7 @@
 pkgname=alga
 pkgver=1.0.0
 pkgrel=2
-pkgdesc="A GTK4/Libadwaita frontend for bootc operations"
+pkgdesc="Atomic deployment and update gateway to immutable Arch Linux built using Rust and GTK4/Libadwaita"
 arch=('x86_64')
 url="https://github.com/zamkara/alga"
 license=('MIT')

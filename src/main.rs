@@ -448,7 +448,7 @@ fn main() {
 
     if is_installed_os {
         let app = Application::builder()
-            .application_id("com.zamkara.alga.updater")
+            .application_id("com.zamkara.alga")
             .build();
 
         app.connect_startup(|_| {
@@ -634,67 +634,11 @@ fn build_updater_ui(app: &Application) {
 
     stack.add_named(&page1_box, Some("page1"));
 
-    // --- Page 2: App Updater (Self Update) ---
-    let page2_box = Box::new(Orientation::Vertical, 0);
-    let content_box2 = Box::new(Orientation::Vertical, 18);
-    content_box2.set_margin_top(32);
-    content_box2.set_margin_bottom(32);
-    content_box2.set_margin_start(32);
-    content_box2.set_margin_end(32);
-    content_box2.set_vexpand(true);
-
-    let app_icon = Image::builder()
-        .icon_name("system-software-update-symbolic")
-        .pixel_size(128)
-        .halign(gtk::Align::Center)
-        .margin_bottom(12)
-        .build();
-    content_box2.append(&app_icon);
-
-    let app_title = Label::builder()
-        .label("App Self-Update")
-        .css_classes(vec!["title-1".to_string()])
-        .halign(gtk::Align::Center)
-        .build();
-    content_box2.append(&app_title);
-
-    let app_ver_lbl = Label::builder()
-        .label(&format!("alga v{}", ALGA_VERSION))
-        .css_classes(vec!["caption".to_string()])
-        .halign(gtk::Align::Center)
-        .build();
-    content_box2.append(&app_ver_lbl);
-
-    let alga_status = Label::builder()
-        .label("Click Check below to scan for Alga application updates.")
-        .justify(gtk::Justification::Center)
-        .wrap(true)
-        .halign(gtk::Align::Center)
-        .build();
-    content_box2.append(&alga_status);
-    page2_box.append(&content_box2);
-
-    let footer2 = Box::new(Orientation::Horizontal, 0);
-    footer2.set_margin_top(16);
-    footer2.set_margin_bottom(24);
-    footer2.set_margin_start(24);
-    footer2.set_margin_end(24);
-
-    let alga_check_btn = Button::builder()
-        .label("Check App Update")
-        .css_classes(vec!["suggested-action".to_string()])
-        .hexpand(true)
-        .build();
-    footer2.append(&alga_check_btn);
-    page2_box.append(&footer2);
-
-    stack.add_named(&page2_box, Some("page_app_update"));
-
-    // --- Page 3: About Alga ---
+    // --- Page 2: About App ---
     let page3_box = Box::new(Orientation::Vertical, 0);
     let content_box3 = Box::new(Orientation::Vertical, 12);
-    content_box3.set_margin_top(48);
-    content_box3.set_margin_bottom(32);
+    content_box3.set_margin_top(32);
+    content_box3.set_margin_bottom(24);
     content_box3.set_margin_start(32);
     content_box3.set_margin_end(32);
     content_box3.set_vexpand(true);
@@ -722,12 +666,30 @@ fn build_updater_ui(app: &Application) {
     content_box3.append(&about_ver);
 
     let about_desc = Label::builder()
-        .label("A beautiful system installation and update frontend designed for the Ark OS project.")
+        .label("Atomic deployment and update gateway to immutable Arch Linux built using Rust and GTK4/Libadwaita")
         .justify(gtk::Justification::Center)
         .wrap(true)
         .halign(gtk::Align::Center)
         .build();
     content_box3.append(&about_desc);
+
+    // --- App Self-Update inside About ---
+    let alga_status = Label::builder()
+        .label("Click Check below to scan for Alga application updates.")
+        .justify(gtk::Justification::Center)
+        .wrap(true)
+        .halign(gtk::Align::Center)
+        .margin_top(16)
+        .build();
+    content_box3.append(&alga_status);
+
+    let alga_check_btn = Button::builder()
+        .label("Check App Update")
+        .css_classes(vec!["suggested-action".to_string()])
+        .halign(gtk::Align::Center)
+        .margin_top(8)
+        .build();
+    content_box3.append(&alga_check_btn);
 
     let dev_label = Label::builder()
         .label("Developed by zamkara")
@@ -752,16 +714,11 @@ fn build_updater_ui(app: &Application) {
     menu_vbox.set_margin_start(8);
     menu_vbox.set_margin_end(8);
 
-    let menu_app_update_btn = Button::builder()
-        .label("Check App Update")
-        .css_classes(vec!["flat".to_string()])
-        .build();
     let menu_about_btn = Button::builder()
-        .label("About Alga")
+        .label("About App")
         .css_classes(vec!["flat".to_string()])
         .build();
 
-    menu_vbox.append(&menu_app_update_btn);
     menu_vbox.append(&menu_about_btn);
     popover.set_child(Some(&menu_vbox));
     menu_btn.set_popover(Some(&popover));
@@ -769,18 +726,13 @@ fn build_updater_ui(app: &Application) {
     // --- Navigation Logic ---
     stack.connect_visible_child_notify(clone!(@weak back_btn, @weak menu_btn => move |s| {
         let current = s.visible_child_name().unwrap_or_default().to_string();
-        let show_back = current == "page_app_update" || current == "page_about";
+        let show_back = current == "page_about";
         back_btn.set_visible(show_back);
         menu_btn.set_visible(!show_back);
     }));
 
     back_btn.connect_clicked(clone!(@weak stack => move |_| {
         stack.set_visible_child_name("page1");
-    }));
-
-    menu_app_update_btn.connect_clicked(clone!(@weak stack, @weak popover => move |_| {
-        popover.popdown();
-        stack.set_visible_child_name("page_app_update");
     }));
 
     menu_about_btn.connect_clicked(clone!(@weak stack, @weak popover => move |_| {
