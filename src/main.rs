@@ -102,13 +102,10 @@ fn check_alga_update() -> Result<Option<String>, String> {
             .ok_or("Could not parse tag_name")?;
         let tag_clean = tag.trim_start_matches('v');
 
-        if tag_clean == ALGA_VERSION {
-            return Ok(None);
-        }
-
-        match (semver::Version::parse(ALGA_VERSION), semver::Version::parse(tag_clean)) {
-            (Ok(current), Ok(remote)) if remote > current => Ok(Some(tag.to_string())),
-            _ => Ok(None),
+        if tag_clean != ALGA_VERSION {
+            Ok(Some(tag.to_string()))
+        } else {
+            Ok(None)
         }
     })
 }
