@@ -6,7 +6,7 @@ use gtk::{
     Box, Button, CheckButton, Image, Label, MenuButton, Orientation, Popover,
     ProgressBar, ScrolledWindow, Stack, StackTransitionType, Switch, TextView,
 };
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::env;
 use std::process::Stdio;
 use std::rc::Rc;
@@ -100,9 +100,24 @@ fn check_alga_update() -> Result<Option<String>, String> {
             .nth(1)
             .and_then(|s| s.split('\"').next())
             .ok_or("Could not parse tag_name")?;
-        let tag_clean = tag.trim_start_matches('v');
 
-        if tag_clean != ALGA_VERSION {
+        // Tags are v{run_number} (e.g. "v42"); compare against installed run_number
+        // stored in /var/lib/alga/current as {"version":"v42",...}
+        let installed = std::fs::read_to_string("/var/lib/alga/current")
+            .ok()
+            .and_then(|s| {
+                s.split("\"version\":\"")
+                    .nth(1)
+                    .and_then(|s| s.split('\"').next())
+                    .map(|s| s.to_string())
+            });
+
+        let is_newer = match &installed {
+            Some(cur) => tag != cur.as_str(),
+            None => true, // no current file → always update
+        };
+
+        if is_newer {
             Ok(Some(tag.to_string()))
         } else {
             Ok(None)
@@ -910,6 +925,18 @@ fn build_updater_ui(app: &Application) {
             scrolled.set_visible(true);
             text_view.set_visible(true);
 
+            let updating = Rc::new(Cell::new(true));
+            glib::timeout_add_local(std::time::Duration::from_millis(150), clone!(@weak progress_bar, @strong updating => @default-return glib::ControlFlow::Break, move || {
+                if !updating.get() {
+                    return glib::ControlFlow::Break;
+                }
+                let frac = progress_bar.fraction();
+                if frac < 0.85 {
+                    progress_bar.set_fraction(frac + 0.003);
+                }
+                glib::ControlFlow::Continue
+            }));
+
             let (sender, receiver) = std::sync::mpsc::channel::<String>();
 
             let buffer = text_view.buffer();
@@ -982,9 +1009,10 @@ fn build_updater_ui(app: &Application) {
                 });
             });
 
-            glib::idle_add_local(clone!(@weak text_view, @weak progress_bar, @weak action_btn, @weak desc, @weak icon, @strong state => @default-return glib::ControlFlow::Continue, move || {
+            glib::idle_add_local(clone!(@weak text_view, @weak progress_bar, @weak action_btn, @weak desc, @weak icon, @strong state, @strong updating => @default-return glib::ControlFlow::Continue, move || {
                 while let Ok(text) = receiver.try_recv() {
                     if text == "EOF_SUCCESS" {
+                        updating.set(false);
                         *state.borrow_mut() = 5;
                         progress_bar.set_fraction(1.0);
                         action_btn.set_label("Reboot Now");
@@ -994,6 +1022,7 @@ fn build_updater_ui(app: &Application) {
                         log_to_desktop("[upgrade] EOF_SUCCESS: update completed.");
                         return glib::ControlFlow::Break;
                     } else if text == "EOF_ERROR" {
+                        updating.set(false);
                         *state.borrow_mut() = 6;
                         progress_bar.set_fraction(1.0);
                         action_btn.set_label("Update Failed");
