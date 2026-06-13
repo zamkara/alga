@@ -1808,13 +1808,15 @@ fn build_ui(app: &Application) {
                      for p in {disk}*; do umount -l $p 2>/dev/null || true; done; \
                      umount -l /run/bootc/mounts/rootfs 2>/dev/null || true; \
                      btrfs device scan --forget 2>/dev/null || true; \
-                     wipefs -af {disk}* || true; \
-                     dd if=/dev/zero of={disk} bs=1M count=1 status=none || true; \
+                     wipefs -af {disk}* 2>/dev/null || true; \
+                     for p in {disk}*; do dd if=/dev/zero of=$p bs=1M count=10 status=none 2>/dev/null || true; done; \
+                     dd if=/dev/zero of={disk} bs=1M count=10 status=none 2>/dev/null || true; \
+                     partprobe {disk} 2>/dev/null || true; \
                      udevadm settle 2>/dev/null || true; \
                      sleep 1 || true; \
                      bootc install to-disk --wipe --filesystem btrfs --bootloader none --source-imgref docker://{variant} {disk} && \
                      ROOT_PART=$(lsblk -rno PATH,FSTYPE {disk} | grep -i 'btrfs' | head -n1 | awk '{{print $1}}'); \
-                     mount $ROOT_PART /mnt && \
+                     mkdir -p /mnt && mount -t btrfs $ROOT_PART /mnt && \
                      DEPLOY_ETC=$(ls -d /mnt/ostree/deploy/default/deploy/*/etc | head -n 1) && \
                      mkdir -p $DEPLOY_ETC/systemd && \
                      if [ \"{zram}\" != \"disabled\" ]; then \
