@@ -1981,10 +1981,12 @@ fn build_ui(app: &Application) {
                             .await;
 
                         if !install_grub {
+                            let bls_with_env = format!(
+                                "export SYSROOT=/tmp/root_mnt; export ESP=/tmp/efi_mnt; {}",
+                                BLS_SYNC_SCRIPT
+                            );
                             let _ = tokio::process::Command::new("pkexec")
-                                .args(["bash", "-c", BLS_SYNC_SCRIPT])
-                                .env("SYSROOT", "/tmp/root_mnt")
-                                .env("ESP", "/tmp/efi_mnt")
+                                .args(["bash", "-c", &bls_with_env])
                                 .output()
                                 .await;
                         }
