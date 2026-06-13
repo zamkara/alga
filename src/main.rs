@@ -71,7 +71,7 @@ mod nm {
             .as_variant()
             .and_then(|v| v.get::<u32>())
             .unwrap_or(0);
-        state == 70
+        state >= 60 // 60=CONNECTED_SITE, 70=CONNECTED_GLOBAL
     }
 }
 
@@ -973,11 +973,12 @@ fn build_updater_ui(app: &Application) {
                                 let _ = sender.send("UPDATE_AVAILABLE".to_string());
                             }
                         } else {
-                            let _ = sender.send("CHECK_FAILED".to_string());
+                            let err = format!("{}{}", stdout, stderr).trim().to_string();
+                            let _ = sender.send(format!("CHECK_FAILED:{}", err));
                         }
                     }
-                    Err(_) => {
-                        let _ = sender.send("CHECK_FAILED".to_string());
+                    Err(e) => {
+                        let _ = sender.send(format!("CHECK_FAILED:{}", e));
                     }
                 }
             });
@@ -999,11 +1000,13 @@ fn build_updater_ui(app: &Application) {
                             desc.set_label("Your system is currently up to date.");
                             icon.set_file(Some("/usr/share/alga/check-for-update.svg"));
                         }
-                        "CHECK_FAILED" => {
+                        _ if msg.starts_with("CHECK_FAILED:") => {
                             *state.borrow_mut() = 3;
-                            action_btn.set_label("Check Failed");
+                            action_btn.set_label("Retry");
                             action_btn.set_sensitive(true);
-                            desc.set_label("Unable to check for updates. Check your internet connection.");
+                            let err = msg.trim_start_matches("CHECK_FAILED:").trim();
+                            let detail = if err.is_empty() { "Unknown error.".to_string() } else { err.chars().take(200).collect::<String>() };
+                            desc.set_label(&format!("Update check failed:\n{}", detail));
                         }
                         _ => {}
                     }
