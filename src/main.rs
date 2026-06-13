@@ -118,9 +118,11 @@ fn download_alga_update(version: &str) -> Result<(), String> {
             .build()
             .map_err(|e| format!("Client error: {}", e))?;
 
+        let run_number = version.trim_start_matches('v');
+        let asset_name = format!("alga-1.0.0-{}-x86_64.pkg.tar.zst", run_number);
         let url = format!(
-            "https://github.com/zamkara/alga/releases/download/{}/alga-x86_64.tar.gz",
-            version
+            "https://github.com/zamkara/alga/releases/download/{}/{}",
+            version, asset_name
         );
         let resp = client.get(&url).send().await.map_err(|e| format!("Download error: {}", e))?;
 
@@ -134,29 +136,36 @@ fn download_alga_update(version: &str) -> Result<(), String> {
         let meta_dir = std::path::PathBuf::from("/var/lib/alga");
         std::fs::create_dir_all(&bin_dir).map_err(|e| format!("Create dir error: {}", e))?;
 
-        let tar_path = bin_dir.join("alga.tar.gz");
-        std::fs::write(&tar_path, &bytes).map_err(|e| format!("Write error: {}", e))?;
+        let pkg_path = bin_dir.join("alga.pkg.tar.zst");
+        std::fs::write(&pkg_path, &bytes).map_err(|e| format!("Write error: {}", e))?;
+
+        let extract_dir = bin_dir.join("extract");
+        let _ = std::fs::remove_dir_all(&extract_dir);
+        std::fs::create_dir_all(&extract_dir).map_err(|e| format!("Create extract dir error: {}", e))?;
 
         let output = std::process::Command::new("tar")
-            .args(["-xzf", tar_path.to_str().unwrap(), "-C", bin_dir.to_str().unwrap()])
+            .args(["-I", "zstd", "-xf", pkg_path.to_str().unwrap(), "-C", extract_dir.to_str().unwrap()])
             .output()
             .map_err(|e| format!("tar error: {}", e))?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            let _ = std::fs::remove_file(&tar_path);
+            let _ = std::fs::remove_file(&pkg_path);
+            let _ = std::fs::remove_dir_all(&extract_dir);
             return Err(format!("tar extract failed: {}", stderr));
         }
 
-        let _ = std::fs::remove_file(&tar_path);
+        let _ = std::fs::remove_file(&pkg_path);
 
+        let extracted_bin = extract_dir.join("usr").join("bin").join("alga");
         let final_path = bin_dir.join("alga");
-        let tmp_path = bin_dir.join("alga");
-        if !tmp_path.exists() {
-            return Err("Extracted binary not found".to_string());
+        if !extracted_bin.exists() {
+            let _ = std::fs::remove_dir_all(&extract_dir);
+            return Err("Extracted binary not found at usr/bin/alga".to_string());
         }
 
-        std::fs::rename(&tmp_path, &final_path).map_err(|e| format!("Rename error: {}", e))?;
+        std::fs::rename(&extracted_bin, &final_path).map_err(|e| format!("Move binary error: {}", e))?;
+        let _ = std::fs::remove_dir_all(&extract_dir);
 
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&final_path, std::fs::Permissions::from_mode(0o755))
