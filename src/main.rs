@@ -956,6 +956,11 @@ fn build_updater_ui(app: &Application) {
             let (sender, receiver) = std::sync::mpsc::channel::<String>();
 
             std::thread::spawn(move || {
+                // Sync BLS entries first so bootc can find the current deployment
+                let _ = std::process::Command::new("pkexec")
+                    .args(["bash", "-c", BLS_SYNC_SCRIPT])
+                    .output();
+
                 let output = std::process::Command::new("pkexec")
                     .args(["bootc", "upgrade", "--check"])
                     .output();
