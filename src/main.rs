@@ -132,47 +132,37 @@ fn download_alga_update(version: &str) -> Result<(), String> {
 
         let bytes = resp.bytes().await.map_err(|e| format!("Read error: {}", e))?;
 
-        let bin_dir = std::path::PathBuf::from("/var/lib/alga/bin");
-        let meta_dir = std::path::PathBuf::from("/var/lib/alga");
-        std::fs::create_dir_all(&bin_dir).map_err(|e| format!("Create dir error: {}", e))?;
+        // Download to /tmp as current user, then install via pkexec
+        let tmp_pkg = "/tmp/alga-update.pkg.tar.zst";
+        std::fs::write(tmp_pkg, &bytes).map_err(|e| format!("Write error: {}", e))?;
 
-        let pkg_path = bin_dir.join("alga.pkg.tar.zst");
-        std::fs::write(&pkg_path, &bytes).map_err(|e| format!("Write error: {}", e))?;
+        let now = chrono_now();
+        let install_script = format!(
+            r#"set -e
+mkdir -p /var/lib/alga/bin
+mkdir -p /tmp/alga-extract
+tar -I zstd -xf {tmp_pkg} -C /tmp/alga-extract
+mv /tmp/alga-extract/usr/bin/alga /var/lib/alga/bin/alga
+chmod 755 /var/lib/alga/bin/alga
+rm -rf /tmp/alga-extract {tmp_pkg}
+printf '{{"version":"{ver}","updated_at":"{ts}"}}' > /var/lib/alga/current"#,
+            tmp_pkg = tmp_pkg,
+            ver = version,
+            ts = now,
+        );
 
-        let extract_dir = bin_dir.join("extract");
-        let _ = std::fs::remove_dir_all(&extract_dir);
-        std::fs::create_dir_all(&extract_dir).map_err(|e| format!("Create extract dir error: {}", e))?;
-
-        let output = std::process::Command::new("tar")
-            .args(["-I", "zstd", "-xf", pkg_path.to_str().unwrap(), "-C", extract_dir.to_str().unwrap()])
+        let output = tokio::process::Command::new("pkexec")
+            .args(["bash", "-c", &install_script])
             .output()
-            .map_err(|e| format!("tar error: {}", e))?;
+            .await
+            .map_err(|e| format!("pkexec error: {}", e))?;
+
+        let _ = std::fs::remove_file(tmp_pkg);
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            let _ = std::fs::remove_file(&pkg_path);
-            let _ = std::fs::remove_dir_all(&extract_dir);
-            return Err(format!("tar extract failed: {}", stderr));
+            return Err(format!("Install failed: {}", stderr));
         }
-
-        let _ = std::fs::remove_file(&pkg_path);
-
-        let extracted_bin = extract_dir.join("usr").join("bin").join("alga");
-        let final_path = bin_dir.join("alga");
-        if !extracted_bin.exists() {
-            let _ = std::fs::remove_dir_all(&extract_dir);
-            return Err("Extracted binary not found at usr/bin/alga".to_string());
-        }
-
-        std::fs::rename(&extracted_bin, &final_path).map_err(|e| format!("Move binary error: {}", e))?;
-        let _ = std::fs::remove_dir_all(&extract_dir);
-
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&final_path, std::fs::Permissions::from_mode(0o755))
-            .map_err(|e| format!("chmod error: {}", e))?;
-
-        let metadata = format!("{{\"version\":\"{}\",\"updated_at\":\"{}\"}}", version, chrono_now());
-        let _ = std::fs::write(meta_dir.join("current"), &metadata);
 
         Ok(())
     })
