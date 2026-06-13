@@ -47,7 +47,7 @@ jobs:
           
             build() {
               cd /work
-              CFLAGS="" RUSTFLAGS="-C link-arg=-fuse-ld=bfd" cargo build --release --locked
+              ALGA_BUILD_NUMBER=${{ github.run_number }} CFLAGS="" RUSTFLAGS="-C link-arg=-fuse-ld=bfd" cargo build --release --locked
             }
           
           package() {

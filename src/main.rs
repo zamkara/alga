@@ -4,7 +4,7 @@ use libadwaita::{
 };
 use gtk::{
     Box, Button, CheckButton, Image, Label, MenuButton, Orientation, Popover,
-    ProgressBar, ScrolledWindow, Stack, StackTransitionType, Switch, TextView,
+    ProgressBar, ScrolledWindow, Spinner, Stack, StackTransitionType, Switch, TextView,
 };
 use std::cell::{Cell, RefCell};
 use std::env;
@@ -75,7 +75,12 @@ mod nm {
     }
 }
 
-const ALGA_VERSION: &str = env!("CARGO_PKG_VERSION");
+// Build number injected by CI as ALGA_BUILD_NUMBER env var (e.g. "70").
+// Falls back to "dev" for local builds.
+const ALGA_VERSION: &str = match option_env!("ALGA_BUILD_NUMBER") {
+    Some(n) => n,
+    None => "dev",
+};
 
 fn check_alga_update() -> Result<Option<String>, String> {
     let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
@@ -101,21 +106,20 @@ fn check_alga_update() -> Result<Option<String>, String> {
             .and_then(|s| s.split('\"').next())
             .ok_or("Could not parse tag_name")?;
 
-        // Tags are v{run_number} (e.g. "v42"); compare against installed run_number
-        // stored in /var/lib/alga/current as {"version":"v42",...}
-        let installed = std::fs::read_to_string("/var/lib/alga/current")
+        // Tags are v{run_number} (e.g. "v70"); compare against installed version.
+        // /var/lib/alga/current stores {"version":"v70",...} after a self-update.
+        // If that file doesn't exist, fall back to ALGA_VERSION baked in at build time.
+        let current_tag = std::fs::read_to_string("/var/lib/alga/current")
             .ok()
             .and_then(|s| {
                 s.split("\"version\":\"")
                     .nth(1)
                     .and_then(|s| s.split('\"').next())
                     .map(|s| s.to_string())
-            });
+            })
+            .unwrap_or_else(|| format!("v{}", ALGA_VERSION));
 
-        let is_newer = match &installed {
-            Some(cur) => tag != cur.as_str(),
-            None => true, // no current file → always update
-        };
+        let is_newer = tag != current_tag.as_str();
 
         if is_newer {
             Ok(Some(tag.to_string()))
@@ -386,17 +390,42 @@ mount -o remount,ro "$SYSROOT" 2>/dev/null || true
 
 
 fn build_network_page(sender: std::sync::mpsc::Sender<String>) -> (Box, Rc<dyn Fn()>) {
-    let toast_overlay = ToastOverlay::new();
     let wrapper = Box::new(Orientation::Vertical, 0);
 
-    // ── Content: icon + text ──
-    let content = Box::new(Orientation::Vertical, 18);
-    content.set_margin_top(24);
-    content.set_margin_bottom(24);
-    content.set_margin_start(24);
-    content.set_margin_end(24);
-    content.set_vexpand(true);
-    content.set_valign(gtk::Align::Center);
+    // ── Checking state (shown first) ──
+    let checking_box = Box::new(Orientation::Vertical, 18);
+    checking_box.set_margin_top(24);
+    checking_box.set_margin_bottom(24);
+    checking_box.set_margin_start(24);
+    checking_box.set_margin_end(24);
+    checking_box.set_vexpand(true);
+    checking_box.set_valign(gtk::Align::Center);
+
+    let spinner = Spinner::builder()
+        .spinning(true)
+        .halign(gtk::Align::Center)
+        .margin_bottom(24)
+        .build();
+    spinner.set_size_request(64, 64);
+
+    let checking_label = Label::builder()
+        .label("Checking connection...")
+        .halign(gtk::Align::Center)
+        .build();
+    checking_label.add_css_class("title-2");
+
+    checking_box.append(&spinner);
+    checking_box.append(&checking_label);
+
+    // ── Offline state (shown only if not connected) ──
+    let offline_box = Box::new(Orientation::Vertical, 18);
+    offline_box.set_margin_top(24);
+    offline_box.set_margin_bottom(24);
+    offline_box.set_margin_start(24);
+    offline_box.set_margin_end(24);
+    offline_box.set_vexpand(true);
+    offline_box.set_valign(gtk::Align::Center);
+    offline_box.set_visible(false);
 
     let offline_icon = Image::builder()
         .icon_name("network-wireless-offline-symbolic")
@@ -419,51 +448,61 @@ fn build_network_page(sender: std::sync::mpsc::Sender<String>) -> (Box, Rc<dyn F
         .wrap(true)
         .build();
 
-    content.append(&offline_icon);
-    content.append(&msg_label);
-    content.append(&sub_label);
+    offline_box.append(&offline_icon);
+    offline_box.append(&msg_label);
+    offline_box.append(&sub_label);
 
-    // ── Footer ──
+    // ── Footer (hidden during checking) ──
     let footer = Box::new(Orientation::Horizontal, 0);
     footer.set_margin_top(16);
     footer.set_margin_bottom(24);
     footer.set_margin_start(24);
     footer.set_margin_end(24);
+    footer.set_visible(false);
 
     let settings_btn = Button::builder()
         .label("Open Network Settings")
         .hexpand(true)
         .css_classes(["suggested-action"])
         .build();
-
     footer.append(&settings_btn);
 
     // ── Assemble ──
-    let page_box = Box::new(Orientation::Vertical, 0);
-    page_box.append(&content);
-    page_box.append(&footer);
+    let content_box = Box::new(Orientation::Vertical, 0);
+    content_box.append(&checking_box);
+    content_box.append(&offline_box);
+    content_box.append(&footer);
+    wrapper.append(&content_box);
 
-    wrapper.append(&page_box);
-    toast_overlay.set_child(Some(&wrapper));
-
-    // Open Wi-Fi Settings in GNOME Control Center
     settings_btn.connect_clicked(|_| {
         let _ = std::process::Command::new("gnome-control-center")
             .arg("wifi")
             .spawn();
     });
 
-    // Re-check connectivity every 3s to auto-advance when user connects
+    // Initial check after a short delay so the spinner is visible first
     let check_sender = sender.clone();
-    glib::timeout_add_local(std::time::Duration::from_secs(3), move || {
+    glib::timeout_add_local_once(std::time::Duration::from_millis(600), clone!(@weak checking_box, @weak offline_box, @weak footer, @weak spinner => move || {
         if nm::is_online() {
             let _ = check_sender.send("connected".to_string());
+        } else {
+            spinner.set_spinning(false);
+            checking_box.set_visible(false);
+            offline_box.set_visible(true);
+            footer.set_visible(true);
+        }
+    }));
+
+    // Re-check every 3s when offline to auto-advance when user connects
+    let check_sender2 = sender.clone();
+    glib::timeout_add_local(std::time::Duration::from_secs(3), move || {
+        if nm::is_online() {
+            let _ = check_sender2.send("connected".to_string());
         }
         glib::ControlFlow::Continue
     });
 
     let trigger: Rc<dyn Fn()> = Rc::new(|| {});
-
     (wrapper, trigger)
 }
 
@@ -732,7 +771,7 @@ fn build_updater_ui(app: &Application) {
     content_box3.append(&about_title);
 
     let about_ver = Label::builder()
-        .label(&format!("Version {}", ALGA_VERSION))
+        .label(&format!("Version v{}", ALGA_VERSION))
         .css_classes(vec!["caption".to_string()])
         .halign(gtk::Align::Center)
         .build();
@@ -798,6 +837,62 @@ fn build_updater_ui(app: &Application) {
     page3_box.append(&footer3);
     stack.add_named(&page3_box, Some("page_about"));
 
+    // --- Page: Done (reused for system upgrade + alga self-update) ---
+    let page_done_box = Box::new(Orientation::Vertical, 0);
+    let content_done = Box::new(Orientation::Vertical, 18);
+    content_done.set_margin_top(32);
+    content_done.set_margin_bottom(32);
+    content_done.set_margin_start(32);
+    content_done.set_margin_end(32);
+    content_done.set_vexpand(true);
+    content_done.set_valign(gtk::Align::Center);
+
+    let done_icon = Image::builder()
+        .file("/usr/share/alga/ready-to-go.svg")
+        .pixel_size(128)
+        .halign(gtk::Align::Center)
+        .margin_bottom(12)
+        .build();
+    let done_title = Label::builder()
+        .label("")
+        .css_classes(vec!["title-1".to_string()])
+        .halign(gtk::Align::Center)
+        .build();
+    let done_desc = Label::builder()
+        .label("")
+        .justify(gtk::Justification::Center)
+        .wrap(true)
+        .halign(gtk::Align::Center)
+        .build();
+    content_done.append(&done_icon);
+    content_done.append(&done_title);
+    content_done.append(&done_desc);
+    page_done_box.append(&content_done);
+
+    let footer_done = Box::new(Orientation::Horizontal, 0);
+    footer_done.set_margin_top(16);
+    footer_done.set_margin_bottom(24);
+    footer_done.set_margin_start(24);
+    footer_done.set_margin_end(24);
+    let done_btn = Button::builder()
+        .label("")
+        .css_classes(vec!["suggested-action".to_string()])
+        .hexpand(true)
+        .build();
+    footer_done.append(&done_btn);
+    page_done_box.append(&footer_done);
+    stack.add_named(&page_done_box, Some("page_done"));
+
+    // done_btn action: 0=reboot, 1=restart_alga
+    let done_action: Rc<Cell<u8>> = Rc::new(Cell::new(0));
+    done_btn.connect_clicked(clone!(@strong done_action => move |_| {
+        if done_action.get() == 1 {
+            restart_alga();
+        } else {
+            let _ = std::process::Command::new("systemctl").arg("reboot").spawn();
+        }
+    }));
+
     main_box.append(&stack);
     window.set_content(Some(&main_box));
     window.present();
@@ -844,7 +939,7 @@ fn build_updater_ui(app: &Application) {
     // --- State and Handlers for System Updater ---
     let state: Rc<RefCell<u8>> = Rc::new(RefCell::new(0));
 
-    action_btn.connect_clicked(clone!(@weak action_btn, @weak progress_bar, @weak text_view, @weak scrolled, @weak desc, @weak icon, @strong state => move |_| {
+    action_btn.connect_clicked(clone!(@weak action_btn, @weak progress_bar, @weak text_view, @weak scrolled, @weak desc, @weak icon, @weak stack, @weak done_title, @weak done_desc, @weak done_btn, @strong state, @strong done_action => move |_| {
         let s = *state.borrow();
 
         if s == 5 {
@@ -1009,17 +1104,17 @@ fn build_updater_ui(app: &Application) {
                 });
             });
 
-            glib::idle_add_local(clone!(@weak text_view, @weak progress_bar, @weak action_btn, @weak desc, @weak icon, @strong state, @strong updating => @default-return glib::ControlFlow::Continue, move || {
+            glib::idle_add_local(clone!(@weak text_view, @weak progress_bar, @weak action_btn, @weak desc, @weak icon, @weak stack, @weak done_title, @weak done_desc, @weak done_btn, @strong state, @strong updating, @strong done_action => @default-return glib::ControlFlow::Continue, move || {
                 while let Ok(text) = receiver.try_recv() {
                     if text == "EOF_SUCCESS" {
                         updating.set(false);
                         *state.borrow_mut() = 5;
-                        progress_bar.set_fraction(1.0);
-                        action_btn.set_label("Reboot Now");
-                        action_btn.set_sensitive(true);
-                        desc.set_label("System update installed. Reboot to apply changes.");
-                        icon.set_file(Some("/usr/share/alga/ready-to-go.svg"));
+                        done_action.set(0);
+                        done_title.set_label("System Updated!");
+                        done_desc.set_label("Reboot to apply the new system update.");
+                        done_btn.set_label("Reboot Now");
                         log_to_desktop("[upgrade] EOF_SUCCESS: update completed.");
+                        stack.set_visible_child_name("page_done");
                         return glib::ControlFlow::Break;
                     } else if text == "EOF_ERROR" {
                         updating.set(false);
@@ -1074,11 +1169,11 @@ fn build_updater_ui(app: &Application) {
     // --- State and Handlers for App Self-Updater ---
     let alga_update_ver: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
 
-    alga_check_btn.connect_clicked(clone!(@weak alga_check_btn, @weak about_ver, @strong alga_update_ver => move |_| {
+    alga_check_btn.connect_clicked(clone!(@weak alga_check_btn, @weak about_ver, @weak stack, @weak done_title, @weak done_desc, @weak done_btn, @strong alga_update_ver, @strong done_action => move |_| {
         let pending = alga_update_ver.borrow().clone();
         if let Some(version) = pending {
             alga_check_btn.set_sensitive(false);
-            about_ver.set_label(&format!("Downloading v{}...", version));
+            about_ver.set_label(&format!("Downloading {}...", version));
             let (sender, receiver) = std::sync::mpsc::channel::<String>();
             let ver = version.clone();
             std::thread::spawn(move || {
@@ -1087,11 +1182,14 @@ fn build_updater_ui(app: &Application) {
                     Err(e) => { let _ = sender.send(format!("ERROR:{}", e)); }
                 }
             });
-            glib::idle_add_local(clone!(@weak alga_check_btn, @weak about_ver, @strong alga_update_ver => @default-return glib::ControlFlow::Continue, move || {
+            glib::idle_add_local(clone!(@weak alga_check_btn, @weak about_ver, @weak stack, @weak done_title, @weak done_desc, @weak done_btn, @strong alga_update_ver, @strong done_action => @default-return glib::ControlFlow::Continue, move || {
                 while let Ok(msg) = receiver.try_recv() {
                     if msg == "DONE" {
-                        about_ver.set_label("Update downloaded. Restarting...");
-                        restart_alga();
+                        done_action.set(1);
+                        done_title.set_label("Alga Updated!");
+                        done_desc.set_label("Restart the app to use the new version.");
+                        done_btn.set_label("Restart Alga");
+                        stack.set_visible_child_name("page_done");
                     } else if let Some(err) = msg.strip_prefix("ERROR:") {
                         about_ver.set_label(&format!("Download failed: {}", err));
                         alga_check_btn.set_label("Retry");
@@ -1115,11 +1213,11 @@ fn build_updater_ui(app: &Application) {
             glib::idle_add_local(clone!(@weak alga_check_btn, @weak about_ver, @strong alga_update_ver => @default-return glib::ControlFlow::Continue, move || {
                 while let Ok(msg) = receiver.try_recv() {
                     if msg == "UP_TO_DATE" {
-                        about_ver.set_label(&format!("Version {} (Already up to date)", ALGA_VERSION));
+                        about_ver.set_label(&format!("v{} (Already up to date)", ALGA_VERSION));
                         alga_check_btn.set_sensitive(true);
                     } else if let Some(ver) = msg.strip_prefix("AVAILABLE:") {
                         *alga_update_ver.borrow_mut() = Some(ver.to_string());
-                        about_ver.set_label(&format!("Update available: v{}", ver));
+                        about_ver.set_label(&format!("Update available: {}", ver));
                         alga_check_btn.set_label("Update Alga");
                         alga_check_btn.set_sensitive(true);
                     } else if let Some(err) = msg.strip_prefix("ERROR:") {
