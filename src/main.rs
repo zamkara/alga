@@ -285,6 +285,25 @@ $full_staged"
     fi
 fi
 
+# Preserve rollback entries: ESP ostree dirs with kernel files count as known
+# deployments so the cleanup loop never removes entries for pruned-but-valid rollbacks.
+if [ -d "$ESP/ostree" ]; then
+    for _esp_dir in "$ESP/ostree"/*/; do
+        [ -d "$_esp_dir" ] || continue
+        _esp_id=$(basename "$_esp_dir")
+        if printf '%s' "$deployments" | grep -qF "$_esp_id"; then
+            continue
+        fi
+        if ls "$_esp_dir"vmlinuz-* >/dev/null 2>&1; then
+            deployments="$deployments
+$_esp_id"
+            echo "bls-sync: Preserving ESP rollback: $_esp_id"
+        fi
+    done
+fi
+
+echo "bls-sync: Known deployments: $(printf '%s' "$deployments" | tr '\n' ' ')"
+
 mkdir -p "$ESP/loader/entries" "$ESP/ostree"
 
 ROOT_UUID=$(findmnt -n -o UUID "$SYSROOT" 2>/dev/null || blkid -s UUID -o value "$(findmnt -n -o SOURCE "$SYSROOT" 2>/dev/null)" 2>/dev/null || echo "")
