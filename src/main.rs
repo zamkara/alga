@@ -258,10 +258,10 @@ rm -f "$SYSROOT/.ark-bls-check" 2>/dev/null || true
 
 export OSTREE_SYSROOT="$OSTREE_REPO"
 
-deployments=$(ostree admin --sysroot="$SYSROOT" status 2>/dev/null | grep -oP 'ostree/deploy/default/deploy/\K[^ ]+' || true)
+deployments=$(ls -d "$DEPLOY_BASE"/*/ 2>/dev/null | xargs -n1 basename 2>/dev/null || true)
 
 if [ -z "$deployments" ]; then
-    deployments=$(ls -d "$DEPLOY_BASE"/*/ 2>/dev/null | xargs -n1 basename 2>/dev/null || true)
+    deployments=$(ostree admin --sysroot="$SYSROOT" status 2>/dev/null | grep -oP 'ostree/deploy/default/deploy/\K[^ ]+' || true)
 fi
 
 if [ -z "$deployments" ]; then
