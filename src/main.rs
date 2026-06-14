@@ -2090,8 +2090,8 @@ fn build_ui(app: &Application) {
                      mount -t btrfs -o subvol=@tmp $ROOT_PART /mnt/tmp && \
                      mount -t btrfs -o subvol=@snapshots $ROOT_PART /mnt/.snapshots && \
                      mount -t btrfs -o subvol=@opt $ROOT_PART /mnt/opt && \
-                     mount $EFI_PART /mnt/boot && \
                      bootc install to-filesystem --source-imgref docker://{variant} --bootloader none /mnt && \
+                     mount $EFI_PART /mnt/boot && \
                      DEPLOY_ETC=$(ls -d /mnt/ostree/deploy/default/deploy/*/etc | head -n 1) && \
                      ROOT_UUID=$(blkid -s UUID -o value $ROOT_PART) && \
                      EFI_UUID=$(blkid -s UUID -o value $EFI_PART) && \
