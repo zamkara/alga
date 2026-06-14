@@ -245,6 +245,25 @@ if [ -z "$ESP" ]; then
 fi
 [ -z "$ESP" ] && exit 0
 
+# Remove auto-generated bootc/ostree dirs (format: default-<hash>) — these are written
+# by 'bootc install' and never cleaned up; they waste ESP space.
+for _rmdir in "$ESP/ostree/default-"*/; do
+    [ -d "$_rmdir" ] || continue
+    echo "bls-sync: Removing auto-generated dir $(basename "$_rmdir")"
+    rm -rf "$_rmdir" 2>/dev/null || true
+done
+
+# Prune ESP: keep only the 2 most recent deployment dirs to prevent ESP from filling up.
+_esp_n=0
+for _esp_pd in $(ls -dt "$ESP/ostree"/[0-9a-f]*.?/ 2>/dev/null); do
+    _esp_n=$((_esp_n + 1))
+    if [ "$_esp_n" -le 2 ]; then continue; fi
+    _esp_pi=$(basename "$_esp_pd")
+    echo "bls-sync: Pruning old ESP deployment: $_esp_pi"
+    rm -f "$ESP/loader/entries/ostree-$_esp_pi.conf" 2>/dev/null || true
+    rm -rf "$_esp_pd" 2>/dev/null || true
+done
+
 # Mount /sysroot RW jika perlu — coba via device agar tidak gagal pada bind mount
 if ! touch "$SYSROOT/.ark-bls-check" 2>/dev/null; then
     SYSROOT_DEV=$(findmnt -n -o SOURCE "$SYSROOT" 2>/dev/null || true)
@@ -386,7 +405,7 @@ for deploy_id in $deployments; do
     cmdline="$cmdline $ostree_param"
 
     entry_file="$ESP/loader/entries/ostree-$deploy_id.conf"
-    cat > "$entry_file" <<BLSENTRY
+    if ! cat > "$entry_file" <<BLSENTRY
 ## This is a boot loader entry for ostree based on Ark Linux
 title $title
 version $kver
@@ -394,6 +413,11 @@ options $cmdline
 linux /ostree/$deploy_id/vmlinuz-$kver
 initrd /ostree/$deploy_id/initramfs-$kver.img
 BLSENTRY
+    then
+        echo "bls-sync: Failed to write entry for $deploy_id (disk full?)"
+        rm -f "$entry_file" 2>/dev/null || true
+        continue
+    fi
 
     echo "bls-sync: Generated entry for deployment $deploy_id (kernel $kver)"
 done
