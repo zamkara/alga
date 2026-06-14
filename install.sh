@@ -83,8 +83,15 @@ Exec=alga
 Icon=com.zamkara.alga
 Terminal=false
 Type=Application
+DBusActivatable=true
 Categories=System;
 StartupNotify=true
+EOF
+
+  install -Dm644 /dev/stdin "$PREFIX/share/dbus-1/services/com.zamkara.alga.service" << 'EOF'
+[D-BUS Service]
+Name=com.zamkara.alga
+Exec=/usr/local/bin/alga --gapplication-service
 EOF
 
   for f in ready-to-go.svg check-for-update.svg update-available.svg; do
