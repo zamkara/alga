@@ -2064,16 +2064,45 @@ fn build_ui(app: &Application) {
                      partprobe {disk} 2>/dev/null || true; \
                      udevadm settle 2>/dev/null || true; \
                      sleep 1 || true; \
-                     printf 'label: gpt\\nsize=1MiB, type=21686148-6449-6E6F-744E-656564454649\\nsize=1024MiB, type=C12A7328-F81F-11D2-BA4B-00A0C93EC93B, name=EFI-SYSTEM\\ntype=0FC63DAF-8483-4772-8E79-3D69D8477DE4\\n' | sfdisk --wipe always --force {disk} && \
+                     printf 'label: gpt\\nsize=1024MiB, type=C12A7328-F81F-11D2-BA4B-00A0C93EC93B, name=EFI-SYSTEM\\ntype=0FC63DAF-8483-4772-8E79-3D69D8477DE4\\n' | sfdisk --wipe always --force {disk} && \
                      partprobe {disk} && udevadm settle && sleep 1 && \
-                     EFI_PART=$(lsblk -rno PATH '{disk}' | grep -vxF '{disk}' | sort | sed -n '2p') && \
+                     EFI_PART=$(lsblk -rno PATH '{disk}' | grep -vxF '{disk}' | sort | sed -n '1p') && \
                      ROOT_PART=$(lsblk -rno PATH '{disk}' | grep -vxF '{disk}' | sort | tail -1) && \
                      mkfs.vfat -F32 -n EFI-SYSTEM $EFI_PART && \
                      mkfs.btrfs -f -L root $ROOT_PART && \
-                     mkdir -p /mnt && mount -t btrfs $ROOT_PART /mnt && \
-                     mkdir -p /mnt/boot && mount $EFI_PART /mnt/boot && \
+                     mount -t btrfs $ROOT_PART /mnt && \
+                     btrfs subvolume create /mnt/@ && \
+                     btrfs subvolume create /mnt/@var && \
+                     btrfs subvolume create /mnt/@var-log && \
+                     btrfs subvolume create /mnt/@var-cache && \
+                     btrfs subvolume create /mnt/@var-tmp && \
+                     btrfs subvolume create /mnt/@tmp && \
+                     btrfs subvolume create /mnt/@snapshots && \
+                     btrfs subvolume create /mnt/@opt && \
+                     umount /mnt && \
+                     mount -t btrfs -o subvol=@ $ROOT_PART /mnt && \
+                     mkdir -p /mnt/var /mnt/tmp /mnt/.snapshots /mnt/opt /mnt/boot && \
+                     mount -t btrfs -o subvol=@var $ROOT_PART /mnt/var && \
+                     mkdir -p /mnt/var/log /mnt/var/cache /mnt/var/tmp && \
+                     mount -t btrfs -o subvol=@var-log $ROOT_PART /mnt/var/log && \
+                     mount -t btrfs -o subvol=@var-cache $ROOT_PART /mnt/var/cache && \
+                     mount -t btrfs -o subvol=@var-tmp $ROOT_PART /mnt/var/tmp && \
+                     mount -t btrfs -o subvol=@tmp $ROOT_PART /mnt/tmp && \
+                     mount -t btrfs -o subvol=@snapshots $ROOT_PART /mnt/.snapshots && \
+                     mount -t btrfs -o subvol=@opt $ROOT_PART /mnt/opt && \
+                     mount $EFI_PART /mnt/boot && \
                      bootc install to-filesystem --source-imgref docker://{variant} --bootloader none /mnt && \
                      DEPLOY_ETC=$(ls -d /mnt/ostree/deploy/default/deploy/*/etc | head -n 1) && \
+                     ROOT_UUID=$(blkid -s UUID -o value $ROOT_PART) && \
+                     EFI_UUID=$(blkid -s UUID -o value $EFI_PART) && \
+                     printf 'UUID=%s /var         btrfs subvol=@var,compress=zstd,noatime 0 0\\n' \"$ROOT_UUID\" >> $DEPLOY_ETC/fstab && \
+                     printf 'UUID=%s /var/log     btrfs subvol=@var-log,compress=zstd,noatime 0 0\\n' \"$ROOT_UUID\" >> $DEPLOY_ETC/fstab && \
+                     printf 'UUID=%s /var/cache   btrfs subvol=@var-cache,compress=zstd,noatime 0 0\\n' \"$ROOT_UUID\" >> $DEPLOY_ETC/fstab && \
+                     printf 'UUID=%s /var/tmp     btrfs subvol=@var-tmp,compress=zstd,noatime 0 0\\n' \"$ROOT_UUID\" >> $DEPLOY_ETC/fstab && \
+                     printf 'UUID=%s /tmp         btrfs subvol=@tmp,compress=zstd,noatime 0 0\\n' \"$ROOT_UUID\" >> $DEPLOY_ETC/fstab && \
+                     printf 'UUID=%s /.snapshots  btrfs subvol=@snapshots,compress=zstd,noatime 0 0\\n' \"$ROOT_UUID\" >> $DEPLOY_ETC/fstab && \
+                     printf 'UUID=%s /opt         btrfs subvol=@opt,compress=zstd,noatime 0 0\\n' \"$ROOT_UUID\" >> $DEPLOY_ETC/fstab && \
+                     printf 'UUID=%s /boot        vfat  umask=0077 0 2\\n' \"$EFI_UUID\" >> $DEPLOY_ETC/fstab && \
                      mkdir -p $DEPLOY_ETC/systemd && \
                      if [ \"{zram}\" != \"disabled\" ]; then \
                        echo \"[zram0]\" > $DEPLOY_ETC/systemd/zram-generator.conf; \
@@ -2086,7 +2115,9 @@ fn build_ui(app: &Application) {
                      else \
                        rm -f $DEPLOY_ETC/systemd/zram-generator.conf; \
                      fi && \
-                     umount -l /mnt/boot && umount -l /mnt",
+                     umount -l /mnt/boot && umount -l /mnt/opt && umount -l /mnt/.snapshots && \
+                     umount -l /mnt/tmp && umount -l /mnt/var/tmp && umount -l /mnt/var/cache && \
+                     umount -l /mnt/var/log && umount -l /mnt/var && umount -l /mnt",
                     disk = disk,
                     variant = variant,
                     zram = zram_val
@@ -2140,7 +2171,6 @@ fn build_ui(app: &Application) {
                         let bootloader_cmd = format!(
                             "set -e; \
                              EFI_PART=$(lsblk -rno PATH,FSTYPE {disk} | grep -i 'vfat' | head -n1 | awk '{{print $1}}'); \
-                             BOOT_PART=$(lsblk -rno PATH,PARTTYPE {disk} | grep -i 'bc13c2ff-59e6-4262-a352-b275fd6f7172' | head -n1 | awk '{{print $1}}'); \
                              ROOT_PART=$(lsblk -rno PATH,FSTYPE {disk} | grep -i 'btrfs' | head -n1 | awk '{{print $1}}'); \
                              [ -z \"$EFI_PART\" ] && echo 'Error: EFI partition not found' && exit 1; \
                              [ -z \"$ROOT_PART\" ] && echo 'Error: Root partition not found' && exit 1; \
@@ -2149,11 +2179,7 @@ fn build_ui(app: &Application) {
                              umount -l /tmp/root_mnt/boot 2>/dev/null || true; \
                              umount -l /tmp/root_mnt 2>/dev/null || true; \
                              umount -l /tmp/efi_mnt 2>/dev/null || true; \
-                             mount $ROOT_PART /tmp/root_mnt; \
-                             if [ -n \"$BOOT_PART\" ]; then \
-                               mkdir -p /tmp/root_mnt/boot; \
-                               mount $BOOT_PART /tmp/root_mnt/boot; \
-                             fi; \
+                             mount -t btrfs -o subvol=@ $ROOT_PART /tmp/root_mnt; \
                              mount $EFI_PART /tmp/efi_mnt; \
                              DEPLOY_PATH=$(find /tmp/root_mnt/ostree/deploy/default/deploy -maxdepth 1 -name '*.0' -type d | head -n1); \
                              [ -z \"$DEPLOY_PATH\" ] && echo 'Error: Deploy path not found' && exit 1; \
@@ -2170,22 +2196,7 @@ fn build_ui(app: &Application) {
                                    fi; \
                                    OSTREE_PARAM=$(grep -o 'ostree=[^ ]*' /tmp/root_mnt/boot/loader/entries/ostree-*.conf 2>/dev/null | head -n1) || true; \
                                    [ -z \"$OSTREE_PARAM\" ] && OSTREE_PARAM=\"ostree=0\"; \
-                                   BOOT_PART_UUID=$(blkid -s UUID -o value \"$BOOT_PART\" 2>/dev/null) || true; \
-                                   if [ -n \"$BOOT_PART_UUID\" ]; then \
-                                     KERNEL_REL=$(echo \"$VMLINUZ\" | sed 's|/tmp/root_mnt/boot||'); \
-                                     INIT_REL=$(echo \"$INITRAMFS\" | sed 's|/tmp/root_mnt/boot||'); \
-                                     {{ \
-                                       echo 'set default=0'; \
-                                       echo 'set timeout=5'; \
-                                       echo 'menuentry \"Arch Linux - Alpha\" {{'; \
-                                       echo '    search --no-floppy --fs-uuid '\"$ROOT_UUID\"' --set=root'; \
-                                       echo '    search --no-floppy --fs-uuid '\"$BOOT_PART_UUID\"' --set=boot_root'; \
-                                       echo '    linux ($boot_root)'\"$KERNEL_REL\"' root=UUID='\"$ROOT_UUID\"' rw quiet splash loglevel=3 rd.udev.log_priority=3 vt.global_cursor_default=0 '\"$OSTREE_PARAM\"''; \
-                                       echo '    initrd ($boot_root)'\"$INIT_REL\"''; \
-                                       echo '}}'; \
-                                     }} > /tmp/root_mnt/boot/grub/grub.cfg; \
-                                   else \
-                                     KERNEL_REL=$(echo \"$VMLINUZ\" | sed 's|/tmp/root_mnt||'); \
+                                   KERNEL_REL=$(echo \"$VMLINUZ\" | sed 's|/tmp/root_mnt||'); \
                                      INIT_REL=$(echo \"$INITRAMFS\" | sed 's|/tmp/root_mnt||'); \
                                      {{ \
                                        echo 'set default=0'; \
@@ -2196,7 +2207,6 @@ fn build_ui(app: &Application) {
                                        echo '    initrd '\"$INIT_REL\"''; \
                                        echo '}}'; \
                                      }} > /tmp/root_mnt/boot/grub/grub.cfg; \
-                                   fi; \
                              else \
                                bootctl install --esp-path=/tmp/efi_mnt --boot-path=/tmp/root_mnt/boot 2>/dev/null || bootctl install --esp-path=/tmp/efi_mnt --boot-path=/tmp/root_mnt/boot --no-variables 2>/dev/null || true; \
                                mkdir -p /tmp/efi_mnt/EFI/BOOT /tmp/efi_mnt/EFI/systemd /tmp/efi_mnt/loader; \
