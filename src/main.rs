@@ -270,6 +270,21 @@ if [ -z "$deployments" ]; then
     exit 0
 fi
 
+staged_file="$SYSROOT/ostree/deploy/default/staged-deployment"
+if [ -f "$staged_file" ]; then
+    staged_id=$(grep -oP '"checksum"\s*:\s*"\K[a-f0-9]+' "$staged_file" 2>/dev/null | head -1 || true)
+    staged_serial=$(grep -oP '"deployserial"\s*:\s*\K[0-9]+' "$staged_file" 2>/dev/null | head -1 || true)
+    if [ -n "$staged_id" ]; then
+        staged_serial="${staged_serial:-0}"
+        full_staged="${staged_id}.${staged_serial}"
+        if [ -d "$DEPLOY_BASE/$full_staged" ] && ! printf '%s' "$deployments" | grep -qF "$full_staged"; then
+            deployments="$deployments
+$full_staged"
+            echo "bls-sync: Including staged deployment $full_staged"
+        fi
+    fi
+fi
+
 mkdir -p "$ESP/loader/entries" "$ESP/ostree"
 
 ROOT_UUID=$(findmnt -n -o UUID "$SYSROOT" 2>/dev/null || blkid -s UUID -o value "$(findmnt -n -o SOURCE "$SYSROOT" 2>/dev/null)" 2>/dev/null || echo "")
@@ -306,12 +321,12 @@ for deploy_id in $deployments; do
     mkdir -p "$ESP/ostree/$deploy_id"
 
     if [ ! -f "$vmlinuz_dst" ] || [ "$vmlinuz_src" -nt "$vmlinuz_dst" ]; then
-        cp -f "$vmlinuz_src" "$vmlinuz_dst"
+        cp -f "$vmlinuz_src" "$vmlinuz_dst" || { echo "bls-sync: Failed to copy vmlinuz for $deploy_id, skipping"; continue; }
     fi
 
     if [ -f "$initramfs_src" ]; then
         if [ ! -f "$initramfs_dst" ] || [ "$initramfs_src" -nt "$initramfs_dst" ]; then
-            cp -f "$initramfs_src" "$initramfs_dst"
+            cp -f "$initramfs_src" "$initramfs_dst" || { echo "bls-sync: Failed to copy initramfs for $deploy_id, skipping"; continue; }
         fi
     else
         if command -v dracut >/dev/null 2>&1; then
