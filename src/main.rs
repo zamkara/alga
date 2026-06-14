@@ -1,10 +1,11 @@
 use libadwaita::prelude::*;
 use libadwaita::{
-    ActionRow, Application, ApplicationWindow, HeaderBar, PreferencesGroup, ToastOverlay,
+    ActionRow, Application, ApplicationWindow, ComboRow, HeaderBar, PreferencesGroup,
 };
 use gtk::{
     Box, Button, CheckButton, Image, Label, MenuButton, Orientation, Popover,
     ProgressBar, ScrolledWindow, Spinner, Stack, StackTransitionType, Switch, TextView,
+    gio,
 };
 use std::cell::{Cell, RefCell};
 use std::env;
@@ -607,6 +608,51 @@ fn main() {
     }
 }
 
+fn prefs_path() -> std::path::PathBuf {
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
+    std::path::PathBuf::from(home).join(".config").join("alga").join("prefs.json")
+}
+
+fn load_prefs() -> (String, String) {
+    let path = prefs_path();
+    let content = std::fs::read_to_string(&path).unwrap_or_default();
+    let app_interval = content.split("\"app_update_interval\":\"")
+        .nth(1).and_then(|s| s.split('"').next()).unwrap_or("1d").to_string();
+    let os_interval = content.split("\"os_update_interval\":\"")
+        .nth(1).and_then(|s| s.split('"').next()).unwrap_or("1d").to_string();
+    (app_interval, os_interval)
+}
+
+fn save_prefs(app_interval: &str, os_interval: &str) {
+    let path = prefs_path();
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let content = format!(
+        "{{\"app_update_interval\":\"{}\",\"os_update_interval\":\"{}\"}}",
+        app_interval, os_interval
+    );
+    let _ = std::fs::write(&path, content);
+}
+
+fn interval_to_seconds(s: &str) -> u32 {
+    match s {
+        "3h" => 3 * 3600,
+        "1d" => 86400,
+        "3d" => 3 * 86400,
+        "1w" => 7 * 86400,
+        "1mo" => 30 * 86400,
+        _ => 86400,
+    }
+}
+
+const INTERVAL_KEYS: &[&str] = &["3h", "1d", "3d", "1w", "1mo"];
+const INTERVAL_LABELS: &[&str] = &["Every 3 hours", "Every day", "Every 3 days", "Every week", "Every month"];
+
+fn interval_index(key: &str) -> u32 {
+    INTERVAL_KEYS.iter().position(|&k| k == key).unwrap_or(1) as u32
+}
+
 fn build_updater_ui(app: &Application) {
     let provider = gtk::CssProvider::new();
     provider.load_from_data("
@@ -848,6 +894,54 @@ fn build_updater_ui(app: &Application) {
     page3_box.append(&footer3);
     stack.add_named(&page3_box, Some("page_about"));
 
+    // --- Page: Preferences ---
+    let (init_app_interval, init_os_interval) = load_prefs();
+
+    let prefs_page_box = Box::new(Orientation::Vertical, 0);
+    let prefs_content = Box::new(Orientation::Vertical, 16);
+    prefs_content.set_margin_top(24);
+    prefs_content.set_margin_bottom(24);
+    prefs_content.set_margin_start(24);
+    prefs_content.set_margin_end(24);
+    prefs_content.set_vexpand(true);
+
+    let prefs_group = PreferencesGroup::builder()
+        .title("Update Intervals")
+        .description("How often Alga checks for updates in the background")
+        .build();
+
+    let interval_model = gtk::StringList::new(INTERVAL_LABELS);
+
+    let app_interval_row = ComboRow::builder()
+        .title("App Update Interval")
+        .model(&interval_model)
+        .selected(interval_index(&init_app_interval))
+        .build();
+    prefs_group.add(&app_interval_row);
+
+    let os_interval_row = ComboRow::builder()
+        .title("OS Update Interval")
+        .model(&interval_model)
+        .selected(interval_index(&init_os_interval))
+        .build();
+    prefs_group.add(&os_interval_row);
+
+    prefs_content.append(&prefs_group);
+    prefs_page_box.append(&prefs_content);
+    stack.add_named(&prefs_page_box, Some("page_preferences"));
+
+    // Save prefs when either combo changes
+    app_interval_row.connect_selected_notify(clone!(@weak os_interval_row => move |row| {
+        let app_key = INTERVAL_KEYS[row.selected() as usize];
+        let os_key = INTERVAL_KEYS[os_interval_row.selected() as usize];
+        save_prefs(app_key, os_key);
+    }));
+    os_interval_row.connect_selected_notify(clone!(@weak app_interval_row => move |row| {
+        let app_key = INTERVAL_KEYS[app_interval_row.selected() as usize];
+        let os_key = INTERVAL_KEYS[row.selected() as usize];
+        save_prefs(app_key, os_key);
+    }));
+
     // --- Page: Done (reused for system upgrade + alga self-update) ---
     let page_done_box = Box::new(Orientation::Vertical, 0);
     let content_done = Box::new(Orientation::Vertical, 18);
@@ -916,11 +1010,17 @@ fn build_updater_ui(app: &Application) {
     menu_vbox.set_margin_start(4);
     menu_vbox.set_margin_end(4);
 
+    let menu_prefs_btn = Button::builder()
+        .label("Preferences")
+        .css_classes(vec!["flat".to_string()])
+        .build();
+
     let menu_about_btn = Button::builder()
         .label("About App")
         .css_classes(vec!["flat".to_string()])
         .build();
 
+    menu_vbox.append(&menu_prefs_btn);
     menu_vbox.append(&menu_about_btn);
     popover.set_child(Some(&menu_vbox));
     menu_btn.set_popover(Some(&popover));
@@ -928,18 +1028,23 @@ fn build_updater_ui(app: &Application) {
     // --- Navigation Logic ---
     stack.connect_visible_child_notify(clone!(@weak window, @weak back_btn, @weak menu_btn => move |s| {
         let current = s.visible_child_name().unwrap_or_default().to_string();
-        let show_back = current == "page_about";
+        let show_back = current == "page_about" || current == "page_preferences";
         back_btn.set_visible(show_back);
         menu_btn.set_visible(!show_back);
-        if show_back {
-            window.set_title(Some("About App"));
-        } else {
-            window.set_title(Some("Software Updater"));
+        match current.as_str() {
+            "page_about" => window.set_title(Some("About App")),
+            "page_preferences" => window.set_title(Some("Preferences")),
+            _ => window.set_title(Some("Software Updater")),
         }
     }));
 
     back_btn.connect_clicked(clone!(@weak stack => move |_| {
         stack.set_visible_child_name("page1");
+    }));
+
+    menu_prefs_btn.connect_clicked(clone!(@weak stack, @weak popover => move |_| {
+        popover.popdown();
+        stack.set_visible_child_name("page_preferences");
     }));
 
     menu_about_btn.connect_clicked(clone!(@weak stack, @weak popover => move |_| {
@@ -1249,6 +1354,78 @@ fn build_updater_ui(app: &Application) {
             }));
         }
     }));
+
+    // --- Periodic background update checks ---
+    {
+        let (app_key, os_key) = load_prefs();
+        let app_secs = interval_to_seconds(&app_key);
+        let os_secs = interval_to_seconds(&os_key);
+
+        // App update check
+        let (app_tx, app_rx) = glib::MainContext::channel::<String>(glib::Priority::DEFAULT);
+        std::thread::spawn(move || {
+            loop {
+                std::thread::sleep(std::time::Duration::from_secs(app_secs as u64));
+                if let Ok(Some(ver)) = check_alga_update() {
+                    let _ = app_tx.send(ver);
+                }
+            }
+        });
+        let app_ref = app.clone();
+        app_rx.attach(None, move |ver| {
+            let n = gio::Notification::new("App Update Available");
+            n.set_body(Some(&format!("Alga {} is ready to install.", ver)));
+            n.add_button("View Update", "app.show-app-update");
+            n.add_button("Skip", "app.dismiss-notification");
+            app_ref.send_notification(Some("alga-app-update"), &n);
+            glib::ControlFlow::Continue
+        });
+
+        // OS update check
+        let (os_tx, os_rx) = glib::MainContext::channel::<()>(glib::Priority::DEFAULT);
+        std::thread::spawn(move || {
+            loop {
+                std::thread::sleep(std::time::Duration::from_secs(os_secs as u64));
+                let out = std::process::Command::new("pkexec")
+                    .args(["bootc", "upgrade", "--check"])
+                    .output();
+                if let Ok(o) = out {
+                    let combined = format!("{}{}", String::from_utf8_lossy(&o.stdout), String::from_utf8_lossy(&o.stderr)).to_lowercase();
+                    if o.status.success() && !combined.contains("no update") && !combined.contains("no changes") {
+                        let _ = os_tx.send(());
+                    }
+                }
+            }
+        });
+        let app_ref = app.clone();
+        os_rx.attach(None, move |_| {
+            let n = gio::Notification::new("System Update Available");
+            n.set_body(Some("A new system update is ready to install."));
+            n.add_button("View Update", "app.show-os-update");
+            n.add_button("Skip", "app.dismiss-notification");
+            app_ref.send_notification(Some("alga-os-update"), &n);
+            glib::ControlFlow::Continue
+        });
+
+        // Register actions for notification buttons
+        let show_app_update = gio::SimpleAction::new("show-app-update", None);
+        show_app_update.connect_activate(clone!(@weak stack, @weak window => move |_, _| {
+            stack.set_visible_child_name("page_about");
+            window.present();
+        }));
+        app.add_action(&show_app_update);
+
+        let show_os_update = gio::SimpleAction::new("show-os-update", None);
+        show_os_update.connect_activate(clone!(@weak stack, @weak window => move |_, _| {
+            stack.set_visible_child_name("page1");
+            window.present();
+        }));
+        app.add_action(&show_os_update);
+
+        let dismiss = gio::SimpleAction::new("dismiss-notification", None);
+        dismiss.connect_activate(move |_, _| {});
+        app.add_action(&dismiss);
+    }
 }
 
 fn build_ui(app: &Application) {
