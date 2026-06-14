@@ -7,7 +7,7 @@ Ark Linux's graphical installer and system updater. Built with Rust, GTK4, and L
 - Install Ark Linux to disk via `bootc install to-disk`
 - System update via `bootc upgrade` with live progress
 - App self-update from the About page
-- BLS boot entry sync after every upgrade
+- BLS boot entry sync after every upgrade — always shows current + rollback deployment in boot menu
 - Network connectivity check on launch
 
 ## Install
