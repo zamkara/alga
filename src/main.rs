@@ -1361,8 +1361,8 @@ fn build_updater_ui(app: &Application) {
         let app_secs = interval_to_seconds(&app_key);
         let os_secs = interval_to_seconds(&os_key);
 
-        // App update check
-        let (app_tx, app_rx) = glib::MainContext::channel::<String>(glib::Priority::DEFAULT);
+        // App update check — background thread, result delivered to main loop via mpsc
+        let (app_tx, app_rx) = std::sync::mpsc::channel::<String>();
         std::thread::spawn(move || {
             loop {
                 std::thread::sleep(std::time::Duration::from_secs(app_secs as u64));
@@ -1372,17 +1372,19 @@ fn build_updater_ui(app: &Application) {
             }
         });
         let app_ref = app.clone();
-        app_rx.attach(None, move |ver| {
-            let n = gio::Notification::new("App Update Available");
-            n.set_body(Some(&format!("Alga {} is ready to install.", ver)));
-            n.add_button("View Update", "app.show-app-update");
-            n.add_button("Skip", "app.dismiss-notification");
-            app_ref.send_notification(Some("alga-app-update"), &n);
+        glib::timeout_add_seconds_local(1, move || {
+            if let Ok(ver) = app_rx.try_recv() {
+                let n = gio::Notification::new("App Update Available");
+                n.set_body(Some(&format!("Alga {} is ready to install.", ver)));
+                n.add_button("View Update", "app.show-app-update");
+                n.add_button("Skip", "app.dismiss-notification");
+                app_ref.send_notification(Some("alga-app-update"), &n);
+            }
             glib::ControlFlow::Continue
         });
 
         // OS update check
-        let (os_tx, os_rx) = glib::MainContext::channel::<()>(glib::Priority::DEFAULT);
+        let (os_tx, os_rx) = std::sync::mpsc::channel::<()>();
         std::thread::spawn(move || {
             loop {
                 std::thread::sleep(std::time::Duration::from_secs(os_secs as u64));
@@ -1398,12 +1400,14 @@ fn build_updater_ui(app: &Application) {
             }
         });
         let app_ref = app.clone();
-        os_rx.attach(None, move |_| {
-            let n = gio::Notification::new("System Update Available");
-            n.set_body(Some("A new system update is ready to install."));
-            n.add_button("View Update", "app.show-os-update");
-            n.add_button("Skip", "app.dismiss-notification");
-            app_ref.send_notification(Some("alga-os-update"), &n);
+        glib::timeout_add_seconds_local(1, move || {
+            if os_rx.try_recv().is_ok() {
+                let n = gio::Notification::new("System Update Available");
+                n.set_body(Some("A new system update is ready to install."));
+                n.add_button("View Update", "app.show-os-update");
+                n.add_button("Skip", "app.dismiss-notification");
+                app_ref.send_notification(Some("alga-os-update"), &n);
+            }
             glib::ControlFlow::Continue
         });
 
