@@ -48,16 +48,3 @@ For a release build matching CI:
 ```sh
 ALGA_BUILD_NUMBER=<run_number> cargo build --release
 ```
-
-## Release
-
-Every push to `main` triggers a GitHub Actions workflow that:
-
-1. Builds an Arch Linux package (`alga-1.0.0-<run_number>-x86_64.pkg.tar.zst`)
-2. Publishes it as a GitHub Release tagged `v<run_number>`
-
-## Commit Rules
-
-- No `Co-Authored-By` or AI attribution in commit messages
-- Never push without explicit user authorization
-- Group push order must be followed: `alga` → `ark-aur` → `ark-image` → `ark.linux`
