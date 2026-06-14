@@ -2064,9 +2064,15 @@ fn build_ui(app: &Application) {
                      partprobe {disk} 2>/dev/null || true; \
                      udevadm settle 2>/dev/null || true; \
                      sleep 1 || true; \
-                     bootc install to-disk --wipe --filesystem btrfs --bootloader none --source-imgref docker://{variant} {disk} && \
-                     ROOT_PART=$(lsblk -rno PATH,FSTYPE {disk} | grep -i 'btrfs' | head -n1 | awk '{{print $1}}'); \
+                     printf 'label: gpt\\nsize=1MiB, type=21686148-6449-6E6F-744E-656564454649\\nsize=1024MiB, type=C12A7328-F81F-11D2-BA4B-00A0C93EC93B, name=EFI-SYSTEM\\ntype=0FC63DAF-8483-4772-8E79-3D69D8477DE4\\n' | sfdisk --wipe always --force {disk} && \
+                     partprobe {disk} && udevadm settle && sleep 1 && \
+                     EFI_PART=$(lsblk -rno PATH '{disk}' | grep -vxF '{disk}' | sort | sed -n '2p') && \
+                     ROOT_PART=$(lsblk -rno PATH '{disk}' | grep -vxF '{disk}' | sort | tail -1) && \
+                     mkfs.vfat -F32 -n EFI-SYSTEM $EFI_PART && \
+                     mkfs.btrfs -f -L root $ROOT_PART && \
                      mkdir -p /mnt && mount -t btrfs $ROOT_PART /mnt && \
+                     mkdir -p /mnt/boot && mount $EFI_PART /mnt/boot && \
+                     bootc install to-filesystem --source-imgref docker://{variant} --bootloader none /mnt && \
                      DEPLOY_ETC=$(ls -d /mnt/ostree/deploy/default/deploy/*/etc | head -n 1) && \
                      mkdir -p $DEPLOY_ETC/systemd && \
                      if [ \"{zram}\" != \"disabled\" ]; then \
@@ -2080,7 +2086,7 @@ fn build_ui(app: &Application) {
                      else \
                        rm -f $DEPLOY_ETC/systemd/zram-generator.conf; \
                      fi && \
-                     umount -l /mnt",
+                     umount -l /mnt/boot && umount -l /mnt",
                     disk = disk,
                     variant = variant,
                     zram = zram_val
