@@ -2229,6 +2229,14 @@ fn build_ui(app: &Application) {
                                  sed -i 's|/boot/ostree|/ostree|g' /tmp/efi_mnt/loader/entries/*.conf 2>/dev/null || true; \
                                  for e in /tmp/efi_mnt/loader/entries/*.conf; do [ -f \"$e\" ] && grep -q 'title.*ostree:' \"$e\" 2>/dev/null && rm -f \"$e\"; done; \
                                fi; \
+                             fi; \
+                             FIRST_DEP=$(ls -1d /tmp/root_mnt/ostree/deploy/default/deploy/*.0 2>/dev/null | head -n1 || true); \
+                             if [ -n \"$FIRST_DEP\" ]; then \
+                               DEP_ID=$(basename \"$FIRST_DEP\"); \
+                               BC=\"${{DEP_ID%.*}}\"; \
+                               BS=\"${{DEP_ID##*.}}\"; \
+                               mkdir -p /tmp/root_mnt/ostree/boot.0/default/$BC 2>/dev/null || true; \
+                               ln -sfn \"../../../deploy/default/deploy/$DEP_ID\" /tmp/root_mnt/ostree/boot.0/default/$BC/$BS 2>/dev/null || true; \
                              fi;",
                             disk = disk,
                             grub = if install_grub { "true" } else { "false" }
