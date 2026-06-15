@@ -326,6 +326,7 @@ echo "bls-sync: Known deployments: $(printf '%s' "$deployments" | tr '\n' ' ')"
 mkdir -p "$ESP/loader/entries" "$ESP/ostree"
 
 ROOT_UUID=$(findmnt -n -o UUID "$SYSROOT" 2>/dev/null || blkid -s UUID -o value "$(findmnt -n -o SOURCE "$SYSROOT" 2>/dev/null)" 2>/dev/null || echo "")
+ROOT_SUBVOL=$(findmnt -n -o OPTIONS "$SYSROOT" 2>/dev/null | tr ',' '\n' | grep '^subvol=' | head -1 | sed 's|^subvol=||;s|^/||' || true)
 
 count=0
 for deploy_id in $deployments; do
@@ -400,7 +401,11 @@ for deploy_id in $deployments; do
         fi
     done
     if [ -z "$cmdline" ]; then
-        cmdline="root=UUID=$ROOT_UUID rw quiet splash loglevel=3 rd.udev.log_priority=3"
+        if [ -n "$ROOT_SUBVOL" ] && [ "$ROOT_SUBVOL" != "/" ]; then
+            cmdline="root=UUID=$ROOT_UUID rootflags=subvol=$ROOT_SUBVOL rw quiet splash loglevel=3 rd.udev.log_priority=3"
+        else
+            cmdline="root=UUID=$ROOT_UUID rw quiet splash loglevel=3 rd.udev.log_priority=3"
+        fi
     fi
     cmdline="$cmdline $ostree_param"
 
