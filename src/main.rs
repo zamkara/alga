@@ -2092,7 +2092,9 @@ fn build_ui(app: &Application) {
                      mount -t btrfs -o subvol=@opt $ROOT_PART /mnt/opt && \
                      bootc install to-filesystem --source-imgref docker://{variant} --bootloader none /mnt && \
                      mount $EFI_PART /mnt/boot && \
-                     DEPLOY_ETC=$(ls -d /mnt/ostree/deploy/default/deploy/*/etc | head -n 1) && \
+                     mkdir -p /tmp/rw_root && \
+                     mount -t btrfs -o subvol=@ $ROOT_PART /tmp/rw_root && \
+                     DEPLOY_ETC=$(ls -d /tmp/rw_root/ostree/deploy/default/deploy/*/etc | head -n 1) && \
                      ROOT_UUID=$(blkid -s UUID -o value $ROOT_PART) && \
                      EFI_UUID=$(blkid -s UUID -o value $EFI_PART) && \
                      printf 'UUID=%s /var         btrfs subvol=@var,compress=zstd,noatime 0 0\\n' \"$ROOT_UUID\" >> $DEPLOY_ETC/fstab && \
@@ -2115,6 +2117,7 @@ fn build_ui(app: &Application) {
                      else \
                        rm -f $DEPLOY_ETC/systemd/zram-generator.conf; \
                      fi && \
+                     umount -l /tmp/rw_root && \
                      umount -l /mnt/boot && umount -l /mnt/opt && umount -l /mnt/.snapshots && \
                      umount -l /mnt/tmp && umount -l /mnt/var/tmp && umount -l /mnt/var/cache && \
                      umount -l /mnt/var/log && umount -l /mnt/var && umount -l /mnt",
