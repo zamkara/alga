@@ -2081,7 +2081,7 @@ fn build_ui(app: &Application) {
                      btrfs subvolume create /mnt/@opt && \
                      umount /mnt && \
                      mount -t btrfs -o subvol=@ $ROOT_PART /mnt && \
-                     mkdir -p /mnt/var /mnt/tmp /mnt/.snapshots /mnt/opt /mnt/boot && \
+                     mkdir -p /mnt/var /mnt/tmp /mnt/.snapshots /mnt/opt && \
                      mount -t btrfs -o subvol=@var $ROOT_PART /mnt/var && \
                      mkdir -p /mnt/var/log /mnt/var/cache /mnt/var/tmp && \
                      mount -t btrfs -o subvol=@var-log $ROOT_PART /mnt/var/log && \
