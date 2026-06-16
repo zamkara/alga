@@ -2091,7 +2091,7 @@ fn build_ui(app: &Application) {
                          _n=$(basename \"$_p\"); \
                          if [ -f \"/sys/class/block/$_n/dev\" ]; then \
                            _mm=$(cat \"/sys/class/block/$_n/dev\"); \
-                           mknod \"$_p\" b \"${_mm%%:*}\" \"${_mm##*:}\" 2>/dev/null || true; \
+                           mknod \"$_p\" b \"${{_mm%%:*}}\" \"${{_mm##*:}}\" 2>/dev/null || true; \
                          fi; \
                        fi; \
                      done && \
