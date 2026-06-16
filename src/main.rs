@@ -2068,6 +2068,8 @@ fn build_ui(app: &Application) {
                 let bootc_cmd = format!(
                     "pkill -9 udisksd gvfs-udisks2-volume-monitor gvfsd 2>/dev/null || true; \
                      killall -9 bootc skopeo 2>/dev/null || true; \
+                     grep -E '^{disk}' /proc/mounts | awk '{{print $2}}' | sort -r | \
+                       while read _mp; do umount -f \"$_mp\" 2>/dev/null || umount -l \"$_mp\" 2>/dev/null || true; done; \
                      for p in {disk}*; do fuser -k \"$p\" 2>/dev/null || true; umount -l \"$p\" 2>/dev/null || true; done; \
                      umount -l /run/bootc/mounts/rootfs 2>/dev/null || true; \
                      btrfs device scan --forget 2>/dev/null || true; \
