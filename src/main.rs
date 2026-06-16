@@ -2117,18 +2117,20 @@ fn build_ui(app: &Application) {
                      btrfs subvolume create /mnt/@var-tmp && \
                      btrfs subvolume create /mnt/@tmp && \
                      btrfs subvolume create /mnt/@snapshots && \
-                     btrfs subvolume create /mnt/@opt && \
-                     umount /mnt && \
+                      btrfs subvolume create /mnt/@opt && \
+                      btrfs subvolume create /mnt/@nix && \
+                      umount /mnt && \
                      mount -t btrfs -o subvol=@ $ROOT_PART /mnt && \
-                     mkdir -p /mnt/var /mnt/tmp /mnt/.snapshots /mnt/opt && \
-                     mount -t btrfs -o subvol=@var $ROOT_PART /mnt/var && \
+                      mkdir -p /mnt/var /mnt/tmp /mnt/.snapshots /mnt/opt /mnt/nix && \
+                      mount -t btrfs -o subvol=@var $ROOT_PART /mnt/var && \
                      mkdir -p /mnt/var/log /mnt/var/cache /mnt/var/tmp && \
                      mount -t btrfs -o subvol=@var-log $ROOT_PART /mnt/var/log && \
                      mount -t btrfs -o subvol=@var-cache $ROOT_PART /mnt/var/cache && \
                      mount -t btrfs -o subvol=@var-tmp $ROOT_PART /mnt/var/tmp && \
                      mount -t btrfs -o subvol=@tmp $ROOT_PART /mnt/tmp && \
                      mount -t btrfs -o subvol=@snapshots $ROOT_PART /mnt/.snapshots && \
-                     mount -t btrfs -o subvol=@opt $ROOT_PART /mnt/opt && \
+                      mount -t btrfs -o subvol=@opt $ROOT_PART /mnt/opt && \
+                      mount -t btrfs -o subvol=@nix $ROOT_PART /mnt/nix && \
                      bootc install to-filesystem --source-imgref docker://{variant} --bootloader none /mnt && \
                      mount $EFI_PART /mnt/boot && \
                      mkdir -p /tmp/rw_root && \
@@ -2142,9 +2144,17 @@ fn build_ui(app: &Application) {
                      printf 'UUID=%s /var/tmp     btrfs subvol=@var-tmp,compress=zstd,noatime 0 0\\n' \"$ROOT_UUID\" >> $DEPLOY_ETC/fstab && \
                      printf 'UUID=%s /tmp         btrfs subvol=@tmp,compress=zstd,noatime 0 0\\n' \"$ROOT_UUID\" >> $DEPLOY_ETC/fstab && \
                      printf 'UUID=%s /.snapshots  btrfs subvol=@snapshots,compress=zstd,noatime,nofail 0 0\\n' \"$ROOT_UUID\" >> $DEPLOY_ETC/fstab && \
-                     printf 'UUID=%s /opt         btrfs subvol=@opt,compress=zstd,noatime,nofail 0 0\\n' \"$ROOT_UUID\" >> $DEPLOY_ETC/fstab && \
-                     printf 'UUID=%s /boot        vfat  umask=0077 0 2\\n' \"$EFI_UUID\" >> $DEPLOY_ETC/fstab && \
-                     mkdir -p $DEPLOY_ETC/systemd && \
+                      printf 'UUID=%s /opt         btrfs subvol=@opt,compress=zstd,noatime,nofail 0 0\\n' \"$ROOT_UUID\" >> $DEPLOY_ETC/fstab && \
+                      printf 'UUID=%s /nix         btrfs subvol=@nix,compress=zstd,noatime,nofail 0 0\\n' \"$ROOT_UUID\" >> $DEPLOY_ETC/fstab && \
+                      printf 'UUID=%s /boot        vfat  umask=0077 0 2\\n' \"$EFI_UUID\" >> $DEPLOY_ETC/fstab && \
+                      DEPLOY_NIX_DIR=$(ls -d /tmp/rw_root/ostree/deploy/default/deploy/*/ 2>/dev/null | head -n 1) && \
+                      if [ -n \"$DEPLOY_NIX_DIR\" ] && [ -d \"${DEPLOY_NIX_DIR}nix\" ]; then \
+                        cp -a \"${DEPLOY_NIX_DIR}nix/.\" /mnt/nix/; \
+                      fi && \
+                      mkdir -p /mnt/nix/var && \
+                      rm -rf /mnt/nix/var/nix && \
+                      ln -sf /var/nix /mnt/nix/var/nix && \
+                      mkdir -p $DEPLOY_ETC/systemd && \
                      if [ \"{zram}\" != \"disabled\" ]; then \
                        echo \"[zram0]\" > $DEPLOY_ETC/systemd/zram-generator.conf; \
                        echo \"compression-algorithm = zstd\" >> $DEPLOY_ETC/systemd/zram-generator.conf; \
@@ -2157,7 +2167,7 @@ fn build_ui(app: &Application) {
                        rm -f $DEPLOY_ETC/systemd/zram-generator.conf; \
                      fi && \
                      umount -l /tmp/rw_root && \
-                     umount -l /mnt/boot && umount -l /mnt/opt && umount -l /mnt/.snapshots && \
+                      umount -l /mnt/boot && umount -l /mnt/nix && umount -l /mnt/opt && umount -l /mnt/.snapshots && \
                      umount -l /mnt/tmp && umount -l /mnt/var/tmp && umount -l /mnt/var/cache && \
                      umount -l /mnt/var/log && umount -l /mnt/var && umount -l /mnt",
                     disk = disk,
