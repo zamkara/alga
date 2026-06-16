@@ -2066,15 +2066,16 @@ fn build_ui(app: &Application) {
             let rt = tokio::runtime::Runtime::new().unwrap();
             rt.block_on(async {
                 let bootc_cmd = format!(
-                    "pkill -9 udisksd gvfs-udisks2-volume-monitor 2>/dev/null || true; \
-                     sleep 1; \
+                    "pkill -9 udisksd gvfs-udisks2-volume-monitor gvfsd 2>/dev/null || true; \
                      killall -9 bootc skopeo 2>/dev/null || true; \
-                     for p in {disk}*; do umount -l $p 2>/dev/null || true; done; \
+                     for p in {disk}*; do fuser -k \"$p\" 2>/dev/null || true; umount -l \"$p\" 2>/dev/null || true; done; \
                      umount -l /run/bootc/mounts/rootfs 2>/dev/null || true; \
                      btrfs device scan --forget 2>/dev/null || true; \
                      wipefs -af {disk}* 2>/dev/null || true; \
-                     for p in {disk}*; do dd if=/dev/zero of=$p bs=1M count=10 status=none 2>/dev/null || true; done; \
+                     for p in {disk}*; do dd if=/dev/zero of=\"$p\" bs=1M count=10 status=none 2>/dev/null || true; done; \
                      dd if=/dev/zero of={disk} bs=1M count=10 status=none 2>/dev/null || true; \
+                     sync; echo 3 > /proc/sys/vm/drop_caches 2>/dev/null || true; \
+                     sleep 2; \
                      DISK_BYTES=$(blockdev --getsize64 {disk} 2>/dev/null || echo 0) && \
                      [ \"$DISK_BYTES\" -lt 21474836480 ] && echo \"ERROR: Disk too small ($(( DISK_BYTES / 1024 / 1024 )) MB). Minimum 20 GB required.\" && exit 1; \
                      if echo '{disk}' | grep -qE 'nvme|mmcblk'; then EFI_PART='{disk}p1'; ROOT_PART='{disk}p2'; else EFI_PART='{disk}1'; ROOT_PART='{disk}2'; fi && \
@@ -2095,7 +2096,14 @@ fn build_ui(app: &Application) {
                          fi; \
                        fi; \
                      done && \
-                     test -b \"$EFI_PART\" || {{ echo \"ERROR: EFI partition $EFI_PART not found.\"; exit 1; }} && \
+                     test -b \"$EFI_PART\" || {{ \
+                       echo \"ERROR: EFI partition $EFI_PART not found.\"; \
+                       echo \"DEBUG proc: $(grep -E 'sda|nvme|mmcblk' /proc/partitions 2>/dev/null | tr '\\n' '|')\"; \
+                       echo \"DEBUG sys: $(ls /sys/class/block/ 2>/dev/null | grep -E 'sda|nvme|mmcblk' | tr '\\n' '|')\"; \
+                       echo \"DEBUG dev: $(ls /dev/ 2>/dev/null | grep -E 'sda|nvme|mmcblk' | tr '\\n' '|')\"; \
+                       echo \"DEBUG fuser: $(fuser {disk}* 2>/dev/null | tr '\\n' '|')\"; \
+                       exit 1; \
+                     }} && \
                      test -b \"$ROOT_PART\" || {{ echo \"ERROR: Root partition $ROOT_PART not found.\"; exit 1; }} && \
                      mkfs.vfat -F32 -n EFI-SYSTEM $EFI_PART && \
                      mkfs.btrfs -f -L root $ROOT_PART && \
