@@ -2082,9 +2082,18 @@ fn build_ui(app: &Application) {
                      udevadm settle 2>/dev/null || true && \
                      for _i in 1 2 3 4 5 6 7 8 9 10; do \
                        test -b \"$ROOT_PART\" && break; \
-                       udevadm trigger --action=add {disk} 2>/dev/null || true; \
+                       udevadm trigger --action=add --subsystem-match=block 2>/dev/null || true; \
                        udevadm settle 2>/dev/null || true; \
                        sleep 1; \
+                     done && \
+                     for _p in \"$EFI_PART\" \"$ROOT_PART\"; do \
+                       if ! test -b \"$_p\"; then \
+                         _n=$(basename \"$_p\"); \
+                         if [ -f \"/sys/class/block/$_n/dev\" ]; then \
+                           _mm=$(cat \"/sys/class/block/$_n/dev\"); \
+                           mknod \"$_p\" b \"${_mm%%:*}\" \"${_mm##*:}\" 2>/dev/null || true; \
+                         fi; \
+                       fi; \
                      done && \
                      test -b \"$EFI_PART\" || {{ echo \"ERROR: EFI partition $EFI_PART not found.\"; exit 1; }} && \
                      test -b \"$ROOT_PART\" || {{ echo \"ERROR: Root partition $ROOT_PART not found.\"; exit 1; }} && \
