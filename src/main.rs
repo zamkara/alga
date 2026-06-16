@@ -2148,8 +2148,8 @@ fn build_ui(app: &Application) {
                       printf 'UUID=%s /nix         btrfs subvol=@nix,compress=zstd,noatime,nofail 0 0\\n' \"$ROOT_UUID\" >> $DEPLOY_ETC/fstab && \
                       printf 'UUID=%s /boot        vfat  umask=0077 0 2\\n' \"$EFI_UUID\" >> $DEPLOY_ETC/fstab && \
                       DEPLOY_NIX_DIR=$(ls -d /tmp/rw_root/ostree/deploy/default/deploy/*/ 2>/dev/null | head -n 1) && \
-                      if [ -n \"$DEPLOY_NIX_DIR\" ] && [ -d \"${DEPLOY_NIX_DIR}nix\" ]; then \
-                        cp -a \"${DEPLOY_NIX_DIR}nix/.\" /mnt/nix/; \
+                      if [ -n \"$DEPLOY_NIX_DIR\" ] && [ -d \"${{DEPLOY_NIX_DIR}}nix\" ]; then \
+                        cp -a \"${{DEPLOY_NIX_DIR}}nix/.\" /mnt/nix/; \
                       fi && \
                       mkdir -p /mnt/nix/var && \
                       rm -rf /mnt/nix/var/nix && \
