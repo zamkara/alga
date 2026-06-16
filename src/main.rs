@@ -1565,7 +1565,7 @@ fn build_ui(app: &Application) {
     let host_drives = get_host_drives();
     let mut disk_radios: Vec<CheckButton> = Vec::new();
     let lsblk = std::process::Command::new("lsblk")
-        .args(["-d", "-n", "-P", "-o", "NAME,SIZE,MODEL,RM,TRAN,TYPE"])
+        .args(["-d", "-n", "-P", "-b", "-o", "NAME,SIZE,MODEL,RM,TRAN,TYPE"])
         .output();
         
     if let Ok(output) = lsblk {
@@ -1578,21 +1578,28 @@ fn build_ui(app: &Application) {
                     continue; // Skip the host's actively running drives
                 }
                 
-                let size = extract_val(line, "SIZE");
+                let size_bytes: u64 = extract_val(line, "SIZE").parse().unwrap_or(0);
+                let size_display = format_bytes(size_bytes);
+                let too_small = size_bytes < MIN_DISK_BYTES;
                 let model = extract_val(line, "MODEL");
-                
+
                 let display_title = if model.is_empty() { format!("Unknown Device (/dev/{})", name) } else { model };
-                let display_subtitle = format!("/dev/{} - {}", name, size);
+                let display_subtitle = if too_small {
+                    format!("/dev/{} - {} — too small (min. 20 GB)", name, size_display)
+                } else {
+                    format!("/dev/{} - {}", name, size_display)
+                };
                 let machine_name = format!("/dev/{}", name);
-                
+
                 let row = ActionRow::builder().title(&display_title).subtitle(&display_subtitle).build();
                 let check = CheckButton::builder().build();
                 check.set_widget_name(&machine_name);
+                check.set_sensitive(!too_small);
 
                 if let Some(first) = disk_radios.first() {
                     check.set_group(Some(first));
                 }
-                
+
                 disk_radios.push(check.clone());
                 row.add_prefix(&check);
                 row.set_activatable_widget(Some(&check));
@@ -2069,6 +2076,8 @@ fn build_ui(app: &Application) {
                      partprobe {disk} 2>/dev/null || true; \
                      udevadm settle 2>/dev/null || true; \
                      sleep 1 || true; \
+                     DISK_BYTES=$(blockdev --getsize64 {disk} 2>/dev/null || echo 0) && \
+                     [ \"$DISK_BYTES\" -lt 21474836480 ] && echo \"ERROR: Disk too small ($(( DISK_BYTES / 1024 / 1024 )) MB). Minimum 20 GB required.\" && exit 1; \
                      printf 'label: gpt\\nsize=1024MiB, type=C12A7328-F81F-11D2-BA4B-00A0C93EC93B, name=EFI-SYSTEM\\ntype=0FC63DAF-8483-4772-8E79-3D69D8477DE4\\n' | sfdisk --wipe always --force {disk} && \
                      partprobe {disk} && udevadm settle && sleep 1 && \
                      EFI_PART=$(lsblk -rno PATH '{disk}' | grep -vxF '{disk}' | sort | sed -n '1p') && \
@@ -2302,6 +2311,18 @@ fn extract_val(line: &str, key: &str) -> String {
         }
     }
     String::new()
+}
+
+const MIN_DISK_BYTES: u64 = 20 * 1024 * 1024 * 1024;
+
+fn format_bytes(bytes: u64) -> String {
+    const GIB: u64 = 1024 * 1024 * 1024;
+    const MIB: u64 = 1024 * 1024;
+    if bytes >= GIB {
+        format!("{:.1} GB", bytes as f64 / GIB as f64)
+    } else {
+        format!("{:.0} MB", bytes as f64 / MIB as f64)
+    }
 }
 
 fn get_host_drives() -> Vec<String> {
