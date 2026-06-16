@@ -2107,8 +2107,8 @@ fn build_ui(app: &Application) {
                      printf 'UUID=%s /var/cache   btrfs subvol=@var-cache,compress=zstd,noatime 0 0\\n' \"$ROOT_UUID\" >> $DEPLOY_ETC/fstab && \
                      printf 'UUID=%s /var/tmp     btrfs subvol=@var-tmp,compress=zstd,noatime 0 0\\n' \"$ROOT_UUID\" >> $DEPLOY_ETC/fstab && \
                      printf 'UUID=%s /tmp         btrfs subvol=@tmp,compress=zstd,noatime 0 0\\n' \"$ROOT_UUID\" >> $DEPLOY_ETC/fstab && \
-                     printf 'UUID=%s /.snapshots  btrfs subvol=@snapshots,compress=zstd,noatime 0 0\\n' \"$ROOT_UUID\" >> $DEPLOY_ETC/fstab && \
-                     printf 'UUID=%s /opt         btrfs subvol=@opt,compress=zstd,noatime 0 0\\n' \"$ROOT_UUID\" >> $DEPLOY_ETC/fstab && \
+                     printf 'UUID=%s /.snapshots  btrfs subvol=@snapshots,compress=zstd,noatime,nofail 0 0\\n' \"$ROOT_UUID\" >> $DEPLOY_ETC/fstab && \
+                     printf 'UUID=%s /opt         btrfs subvol=@opt,compress=zstd,noatime,nofail 0 0\\n' \"$ROOT_UUID\" >> $DEPLOY_ETC/fstab && \
                      printf 'UUID=%s /boot        vfat  umask=0077 0 2\\n' \"$EFI_UUID\" >> $DEPLOY_ETC/fstab && \
                      mkdir -p $DEPLOY_ETC/systemd && \
                      if [ \"{zram}\" != \"disabled\" ]; then \
