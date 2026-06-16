@@ -2079,10 +2079,17 @@ fn build_ui(app: &Application) {
                      DISK_BYTES=$(blockdev --getsize64 {disk} 2>/dev/null || echo 0) && \
                      [ \"$DISK_BYTES\" -lt 21474836480 ] && echo \"ERROR: Disk too small ($(( DISK_BYTES / 1024 / 1024 )) MB). Minimum 20 GB required.\" && exit 1; \
                      printf 'label: gpt\\nsize=1024MiB, type=C12A7328-F81F-11D2-BA4B-00A0C93EC93B, name=EFI-SYSTEM\\ntype=0FC63DAF-8483-4772-8E79-3D69D8477DE4\\n' | sfdisk --wipe always --force {disk} && \
-                     partprobe {disk} && udevadm settle && sleep 2 && \
                      if echo '{disk}' | grep -qE 'nvme|mmcblk'; then EFI_PART='{disk}p1'; ROOT_PART='{disk}p2'; else EFI_PART='{disk}1'; ROOT_PART='{disk}2'; fi && \
-                     test -b \"$EFI_PART\" || {{ echo \"ERROR: EFI partition $EFI_PART not found after partprobe\"; exit 1; }} && \
-                     test -b \"$ROOT_PART\" || {{ echo \"ERROR: Root partition $ROOT_PART not found after partprobe\"; exit 1; }} && \
+                     for _i in 1 2 3 4 5 6 7 8 9 10; do \
+                       test -b \"$ROOT_PART\" && break; \
+                       partprobe {disk} 2>/dev/null || true; \
+                       blockdev --rereadpt {disk} 2>/dev/null || true; \
+                       partx -u {disk} 2>/dev/null || true; \
+                       udevadm settle 2>/dev/null || true; \
+                       sleep 1; \
+                     done && \
+                     test -b \"$EFI_PART\" || {{ echo \"ERROR: EFI partition $EFI_PART not found. Try running from a live ISO.\"; exit 1; }} && \
+                     test -b \"$ROOT_PART\" || {{ echo \"ERROR: Root partition $ROOT_PART not found. Try running from a live ISO.\"; exit 1; }} && \
                      mkfs.vfat -F32 -n EFI-SYSTEM $EFI_PART && \
                      mkfs.btrfs -f -L root $ROOT_PART && \
                      mount -t btrfs $ROOT_PART /mnt && \
