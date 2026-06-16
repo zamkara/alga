@@ -1,6 +1,7 @@
 use libadwaita::prelude::*;
 use libadwaita::{
-    ActionRow, Application, ApplicationWindow, ComboRow, HeaderBar, PreferencesGroup,
+    ActionRow, Application, ApplicationWindow, ComboRow, HeaderBar, PasswordEntryRow,
+    PreferencesGroup,
 };
 use gtk::{
     Box, Button, CheckButton, Image, Label, MenuButton, Orientation, Popover,
@@ -1542,6 +1543,11 @@ fn build_ui(app: &Application) {
     let target_disk = Rc::new(RefCell::new(String::new()));
     let target_variant = Rc::new(RefCell::new(String::new()));
     let target_zram = Rc::new(RefCell::new(String::from("auto")));
+    let target_encryption = Rc::new(RefCell::new(false));
+    let target_enc_mode = Rc::new(RefCell::new(String::from("passphrase")));
+    let target_passphrase = Rc::new(RefCell::new(String::new()));
+    let target_recovery_key = Rc::new(RefCell::new(String::new()));
+    let has_tpm2 = std::path::Path::new("/sys/class/tpm/tpm0").exists();
     let cancel_sender: Rc<RefCell<Option<oneshot::Sender<()>>>> = Rc::new(RefCell::new(None));
     let pulse_timeout: Rc<RefCell<Option<glib::SourceId>>> = Rc::new(RefCell::new(None));
 
@@ -1736,7 +1742,187 @@ fn build_ui(app: &Application) {
     page2_box.append(&footer2);
     stack.add_named(&page2_box, Some("page3"));
 
-    // --- Page 3: Detailed Confirmation ---
+    // --- Encryption Page ---
+    let page_enc_box = Box::new(Orientation::Vertical, 0);
+    let content_enc = Box::new(Orientation::Vertical, 18);
+    content_enc.set_margin_top(24);
+    content_enc.set_margin_bottom(24);
+    content_enc.set_margin_start(24);
+    content_enc.set_margin_end(24);
+    content_enc.set_vexpand(true);
+
+    let title_enc = Label::builder()
+        .label("<b>Disk Encryption</b>")
+        .use_markup(true)
+        .halign(gtk::Align::Start)
+        .build();
+    title_enc.add_css_class("title-2");
+
+    // Group 1: Encryption toggle (mirip NVIDIA/GRUB switch)
+    let grp_enc = PreferencesGroup::builder()
+        .description("Protect your data with LUKS2 encryption. A passphrase is required at every boot unless TPM2 is used.")
+        .build();
+    let enc_switch = Switch::builder().active(true).valign(gtk::Align::Center).build();
+    let row_enc = ActionRow::builder()
+        .title("Encrypt Disk")
+        .subtitle("Full-disk encryption (recommended)")
+        .build();
+    row_enc.add_suffix(&enc_switch);
+    grp_enc.add(&row_enc);
+
+    // Group 2: Encryption mode (mirip zRAM ComboRow)
+    let mode_options = if has_tpm2 {
+        gtk::StringList::new(&["Passphrase", "TPM2 Only", "TPM2 + Passphrase"])
+    } else {
+        gtk::StringList::new(&["Passphrase"])
+    };
+    let combo_enc = ComboRow::builder()
+        .title("Unlock Method")
+        .model(&mode_options)
+        .selected(0)
+        .build();
+
+    // Group 3: Passphrase entries — visible hanya jika mode != TPM2 Only
+    let pass_entry = PasswordEntryRow::builder()
+        .title("Passphrase")
+        .build();
+    let pass_confirm = PasswordEntryRow::builder()
+        .title("Confirm Passphrase")
+        .build();
+    let strength_label = Label::builder()
+        .halign(gtk::Align::Start)
+        .margin_start(16)
+        .margin_top(4)
+        .margin_bottom(8)
+        .build();
+
+    let grp_pass = PreferencesGroup::new();
+    grp_pass.add(&pass_entry);
+    grp_pass.add(&pass_confirm);
+    grp_pass.add(&strength_label);
+
+    // Layout scrollable
+    let scroll_box_enc = Box::new(Orientation::Vertical, 12);
+    scroll_box_enc.append(&grp_enc);
+    scroll_box_enc.append(&combo_enc);
+    scroll_box_enc.append(&grp_pass);
+
+    let scroll_enc = ScrolledWindow::builder()
+        .child(&scroll_box_enc)
+        .vexpand(true)
+        .build();
+    content_enc.append(&title_enc);
+    content_enc.append(&scroll_enc);
+    page_enc_box.append(&content_enc);
+
+    let footer_enc = Box::new(Orientation::Horizontal, 0);
+    footer_enc.set_margin_top(16);
+    footer_enc.set_margin_bottom(24);
+    footer_enc.set_margin_start(24);
+    footer_enc.set_margin_end(24);
+    let next_btn_enc = Button::builder()
+        .label("Next")
+        .css_classes(["suggested-action"])
+        .hexpand(true)
+        .build();
+    footer_enc.append(&next_btn_enc);
+    page_enc_box.append(&footer_enc);
+    stack.add_named(&page_enc_box, Some("page_enc"));
+
+    // --- Encryption Page Signals ---
+
+    // Toggle combo + pass group visibility with encryption switch
+    combo_enc.set_visible(enc_switch.is_active());
+    grp_pass.set_visible(enc_switch.is_active() && combo_enc.selected() != 1);
+    enc_switch.connect_state_set(clone!(@strong combo_enc, @strong grp_pass => @default-return glib::Propagation::Proceed, move |_, state| {
+        combo_enc.set_visible(state);
+        grp_pass.set_visible(state && combo_enc.selected() != 1);
+        glib::Propagation::Proceed
+    }));
+
+    // Toggle pass group when mode changes
+    combo_enc.connect_selected_notify(clone!(@weak grp_pass, @weak enc_switch => move |row| {
+        grp_pass.set_visible(enc_switch.is_active() && row.selected() != 1);
+    }));
+
+    // Passphrase validation + strength indicator
+    let validate_pass = clone!(@weak pass_entry, @weak pass_confirm, @weak strength_label, @weak next_btn_enc, @weak combo_enc, @strong target_passphrase => move || {
+        let pass = pass_entry.text().as_str().to_string();
+        let confirm = pass_confirm.text().as_str().to_string();
+        let mut valid = !pass.is_empty() && pass == confirm;
+        *target_passphrase.borrow_mut() = pass.clone();
+
+        if confirm.is_empty() {
+            pass_confirm.remove_css_class("error");
+        } else if valid {
+            pass_confirm.remove_css_class("error");
+        } else {
+            pass_confirm.add_css_class("error");
+            valid = false;
+        }
+
+        // Strength
+        if !pass.is_empty() {
+            let has_upper = pass.chars().any(|c| c.is_uppercase());
+            let has_lower = pass.chars().any(|c| c.is_lowercase());
+            let has_digit = pass.chars().any(|c| c.is_ascii_digit());
+            let has_symbol = pass.chars().any(|c| !c.is_alphanumeric());
+            let variety = [has_upper, has_lower, has_digit, has_symbol].into_iter().filter(|&x| x).count();
+            let length = pass.len();
+
+            if length < 8 || variety < 2 {
+                strength_label.set_text("Weak — make it longer or more complex");
+                strength_label.remove_css_class("success");
+                strength_label.add_css_class("error");
+            } else if length < 12 || variety < 3 {
+                strength_label.set_text("Fair — consider making it longer");
+                strength_label.remove_css_class("success");
+                strength_label.remove_css_class("error");
+                strength_label.add_css_class("warning");
+            } else {
+                strength_label.set_text("Strong passphrase");
+                strength_label.remove_css_class("error");
+                strength_label.remove_css_class("warning");
+                strength_label.add_css_class("success");
+            }
+            strength_label.set_visible(true);
+        } else {
+            strength_label.set_visible(false);
+        }
+
+        // Enable Next only if valid (or if TPM2 only mode)
+        let mode_idx = combo_enc.selected();
+        let need_pass = mode_idx != 1;
+        next_btn_enc.set_sensitive(!need_pass || valid);
+    });
+
+    pass_entry.connect_changed(clone!(@strong validate_pass => move |_| {
+        validate_pass();
+    }));
+    pass_confirm.connect_changed(clone!(@strong validate_pass => move |_| {
+        validate_pass();
+    }));
+
+    // Next button: save state + advance
+    next_btn_enc.connect_clicked(clone!(@weak stack, @strong target_encryption, @strong target_enc_mode, @strong target_passphrase, @weak enc_switch, @weak combo_enc, @weak pass_entry => move |_| {
+        *target_encryption.borrow_mut() = enc_switch.is_active();
+        let mode_id = match combo_enc.selected() {
+            0 => "passphrase",
+            1 => "tpm2-only",
+            _ => "tpm2-passphrase",
+        };
+        *target_enc_mode.borrow_mut() = mode_id.to_string();
+        if !enc_switch.is_active() {
+            *target_passphrase.borrow_mut() = String::new();
+        } else if mode_id == "tpm2-only" {
+            *target_passphrase.borrow_mut() = String::new();
+        } else {
+            *target_passphrase.borrow_mut() = pass_entry.text().as_str().to_string();
+        }
+        stack.set_visible_child_name("page4");
+    }));
+
+    // --- Page 4: Detailed Confirmation ---
     let page3_box = Box::new(Orientation::Vertical, 0);
     let content3 = Box::new(Orientation::Vertical, 18);
     content3.set_margin_top(24);
@@ -1899,7 +2085,7 @@ fn build_ui(app: &Application) {
     
     stack.connect_visible_child_notify(clone!(@weak back_btn => move |s| {
         let current = s.visible_child_name().unwrap_or_default();
-        back_btn.set_visible(current == "page2" || current == "page3" || current == "page4");
+        back_btn.set_visible(current == "page2" || current == "page3" || current == "page_enc" || current == "page4");
     }));
 
     back_btn.connect_clicked(clone!(@weak stack => move |_| {
@@ -1908,8 +2094,10 @@ fn build_ui(app: &Application) {
             stack.set_visible_child_name("page1");
         } else if current == "page3" {
             stack.set_visible_child_name("page1");
-        } else if current == "page4" {
+        } else if current == "page_enc" {
             stack.set_visible_child_name("page3");
+        } else if current == "page4" {
+            stack.set_visible_child_name("page_enc");
         }
     }));
     
@@ -1953,7 +2141,7 @@ fn build_ui(app: &Application) {
             _ => "auto".to_string(),
         };
         
-        stack.set_visible_child_name("page4");
+        stack.set_visible_child_name("page_enc");
     }));
     
     cancel_btn.connect_clicked(clone!(@strong cancel_sender, @weak stack, @weak cancel_btn => move |_| {
@@ -2000,13 +2188,34 @@ fn build_ui(app: &Application) {
         let disk = target_disk.borrow().clone();
         let variant = target_variant.borrow().clone();
         let zram_val = target_zram.borrow().clone();
+        let enc_on = target_encryption.borrow().clone();
+        let enc_mode = target_enc_mode.borrow().clone();
+        let pass = target_passphrase.borrow().clone();
+        
+        // Write passphrase to temp file for secure shell access
+        let keyfile = if enc_on && !pass.is_empty() {
+            let path = format!("/tmp/.ark-key-{}", std::process::id());
+            let _ = std::fs::write(&path, &pass);
+            path
+        } else {
+            String::new()
+        };
+        let use_tpm2_str = if enc_on && (enc_mode == "tpm2-only" || enc_mode == "tpm2-passphrase") {
+            "yes"
+        } else {
+            ""
+        };
         
         let (sender, receiver) = std::sync::mpsc::channel::<String>();
         let (kill_tx, mut kill_rx) = oneshot::channel::<()>();
         *cancel_sender.borrow_mut() = Some(kill_tx);
         
-        glib::idle_add_local(clone!(@weak text_view, @weak progress_bar, @weak stack, @weak cancel_btn, @weak title4, @strong cancel_sender, @strong pulse_timeout => @default-return glib::ControlFlow::Continue, move || {
+        glib::idle_add_local(clone!(@weak text_view, @weak progress_bar, @weak stack, @weak cancel_btn, @weak title4, @strong cancel_sender, @strong pulse_timeout, @strong target_recovery_key => @default-return glib::ControlFlow::Continue, move || {
             while let Ok(msg) = receiver.try_recv() {
+                // Capture recovery key
+                if let Some(key) = msg.strip_prefix("RECOVERY_KEY=") {
+                    *target_recovery_key.borrow_mut() = key.to_string();
+                }
                 // Append raw log line to ~/Desktop/log.txt
                 if let Ok(home) = std::env::var("HOME") {
                     let desktop_log = std::path::PathBuf::from(home).join("Desktop").join("log.txt");
@@ -2106,47 +2315,72 @@ fn build_ui(app: &Application) {
                        echo \"DEBUG fuser: $(fuser {disk}* 2>/dev/null | tr '\\n' '|')\"; \
                        exit 1; \
                      }} && \
-                     test -b \"$ROOT_PART\" || {{ echo \"ERROR: Root partition $ROOT_PART not found.\"; exit 1; }} && \
-                     mkfs.vfat -F32 -n EFI-SYSTEM $EFI_PART && \
-                     mkfs.btrfs -f -L root $ROOT_PART && \
-                     mount -t btrfs $ROOT_PART /mnt && \
-                     btrfs subvolume create /mnt/@ && \
-                     btrfs subvolume create /mnt/@var && \
-                     btrfs subvolume create /mnt/@var-log && \
-                     btrfs subvolume create /mnt/@var-cache && \
-                     btrfs subvolume create /mnt/@var-tmp && \
-                     btrfs subvolume create /mnt/@tmp && \
-                     btrfs subvolume create /mnt/@snapshots && \
-                      btrfs subvolume create /mnt/@opt && \
-                      btrfs subvolume create /mnt/@nix && \
-                      umount /mnt && \
-                     mount -t btrfs -o subvol=@ $ROOT_PART /mnt && \
-                      mkdir -p /mnt/var /mnt/tmp /mnt/.snapshots /mnt/opt /mnt/nix && \
-                      mount -t btrfs -o subvol=@var $ROOT_PART /mnt/var && \
-                     mkdir -p /mnt/var/log /mnt/var/cache /mnt/var/tmp && \
-                     mount -t btrfs -o subvol=@var-log $ROOT_PART /mnt/var/log && \
-                     mount -t btrfs -o subvol=@var-cache $ROOT_PART /mnt/var/cache && \
-                     mount -t btrfs -o subvol=@var-tmp $ROOT_PART /mnt/var/tmp && \
-                     mount -t btrfs -o subvol=@tmp $ROOT_PART /mnt/tmp && \
-                     mount -t btrfs -o subvol=@snapshots $ROOT_PART /mnt/.snapshots && \
-                      mount -t btrfs -o subvol=@opt $ROOT_PART /mnt/opt && \
-                      mount -t btrfs -o subvol=@nix $ROOT_PART /mnt/nix && \
-                     bootc install to-filesystem --source-imgref docker://{variant} --bootloader none /mnt && \
-                     mount $EFI_PART /mnt/boot && \
-                     mkdir -p /tmp/rw_root && \
-                     mount -t btrfs -o subvol=@ $ROOT_PART /tmp/rw_root && \
-                     DEPLOY_ETC=$(ls -d /tmp/rw_root/ostree/deploy/default/deploy/*/etc | head -n 1) && \
-                     ROOT_UUID=$(blkid -s UUID -o value $ROOT_PART) && \
-                     EFI_UUID=$(blkid -s UUID -o value $EFI_PART) && \
-                     printf 'UUID=%s /var         btrfs subvol=@var,compress=zstd,noatime 0 0\\n' \"$ROOT_UUID\" >> $DEPLOY_ETC/fstab && \
-                     printf 'UUID=%s /var/log     btrfs subvol=@var-log,compress=zstd,noatime 0 0\\n' \"$ROOT_UUID\" >> $DEPLOY_ETC/fstab && \
-                     printf 'UUID=%s /var/cache   btrfs subvol=@var-cache,compress=zstd,noatime 0 0\\n' \"$ROOT_UUID\" >> $DEPLOY_ETC/fstab && \
-                     printf 'UUID=%s /var/tmp     btrfs subvol=@var-tmp,compress=zstd,noatime 0 0\\n' \"$ROOT_UUID\" >> $DEPLOY_ETC/fstab && \
-                     printf 'UUID=%s /tmp         btrfs subvol=@tmp,compress=zstd,noatime 0 0\\n' \"$ROOT_UUID\" >> $DEPLOY_ETC/fstab && \
-                     printf 'UUID=%s /.snapshots  btrfs subvol=@snapshots,compress=zstd,noatime,nofail 0 0\\n' \"$ROOT_UUID\" >> $DEPLOY_ETC/fstab && \
-                      printf 'UUID=%s /opt         btrfs subvol=@opt,compress=zstd,noatime,nofail 0 0\\n' \"$ROOT_UUID\" >> $DEPLOY_ETC/fstab && \
-                      printf 'UUID=%s /nix         btrfs subvol=@nix,compress=zstd,noatime,nofail 0 0\\n' \"$ROOT_UUID\" >> $DEPLOY_ETC/fstab && \
+                      test -b \"$ROOT_PART\" || {{ echo \"ERROR: Root partition $ROOT_PART not found.\"; exit 1; }} && \
+                      PASSPHRASE=$(cat \"{keyfile}\" 2>/dev/null || true) && rm -f \"{keyfile}\" 2>/dev/null || true && \
+                      ROOT_DEV=\"$ROOT_PART\" && \
+                      if [ -n \"$PASSPHRASE\" ]; then \
+                        printf '%s' \"$PASSPHRASE\" | cryptsetup luksFormat --type luks2 --pbkdf argon2id --key-file - \"$ROOT_PART\" && \
+                        printf '%s' \"$PASSPHRASE\" | cryptsetup open --key-file - \"$ROOT_PART\" ark-root && \
+                        ROOT_DEV=\"/dev/mapper/ark-root\" && \
+                        if [ -n \"{use_tpm2}\" ]; then \
+                          printf '%s' \"$PASSPHRASE\" | systemd-cryptenroll --tpm2-device=auto --tpm2-pcrs=0+7 \"$ROOT_PART\"; \
+                        fi && \
+                        RECOVERY_KEY=$(printf '%s' \"$PASSPHRASE\" | systemd-cryptenroll --recovery-key \"$ROOT_PART\" 2>&1 | grep -oE '[A-Z0-9]+-[A-Z0-9]+-[A-Z0-9]+-[A-Z0-9]+' || true) && \
+                        [ -n \"$RECOVERY_KEY\" ] && echo \"RECOVERY_KEY=$RECOVERY_KEY\" || true; \
+                      fi && \
+                      mkfs.vfat -F32 -n EFI-SYSTEM $EFI_PART && \
+                      mkfs.btrfs -f -L root $ROOT_DEV && \
+                      mount -t btrfs $ROOT_DEV /mnt && \
+                      btrfs subvolume create /mnt/@ && \
+                      btrfs subvolume create /mnt/@var && \
+                      btrfs subvolume create /mnt/@var-log && \
+                      btrfs subvolume create /mnt/@var-cache && \
+                      btrfs subvolume create /mnt/@var-tmp && \
+                      btrfs subvolume create /mnt/@tmp && \
+                      btrfs subvolume create /mnt/@snapshots && \
+                       btrfs subvolume create /mnt/@opt && \
+                       btrfs subvolume create /mnt/@nix && \
+                       umount /mnt && \
+                      mount -t btrfs -o subvol=@ $ROOT_DEV /mnt && \
+                       mkdir -p /mnt/var /mnt/tmp /mnt/.snapshots /mnt/opt /mnt/nix && \
+                       mount -t btrfs -o subvol=@var $ROOT_DEV /mnt/var && \
+                      mkdir -p /mnt/var/log /mnt/var/cache /mnt/var/tmp && \
+                      mount -t btrfs -o subvol=@var-log $ROOT_DEV /mnt/var/log && \
+                      mount -t btrfs -o subvol=@var-cache $ROOT_DEV /mnt/var/cache && \
+                      mount -t btrfs -o subvol=@var-tmp $ROOT_DEV /mnt/var/tmp && \
+                      mount -t btrfs -o subvol=@tmp $ROOT_DEV /mnt/tmp && \
+                      mount -t btrfs -o subvol=@snapshots $ROOT_DEV /mnt/.snapshots && \
+                       mount -t btrfs -o subvol=@opt $ROOT_DEV /mnt/opt && \
+                       mount -t btrfs -o subvol=@nix $ROOT_DEV /mnt/nix && \
+                      bootc install to-filesystem --source-imgref docker://{variant} --bootloader none /mnt && \
+                      mount $EFI_PART /mnt/boot && \
+                      mkdir -p /tmp/rw_root && \
+                      mount -t btrfs -o subvol=@ $ROOT_DEV /tmp/rw_root && \
+                      DEPLOY_ETC=$(ls -d /tmp/rw_root/ostree/deploy/default/deploy/*/etc | head -n 1) && \
+                      EFI_UUID=$(blkid -s UUID -o value $EFI_PART) && \
+                      if [ \"$ROOT_DEV\" != \"$ROOT_PART\" ]; then \
+                        LUKS_UUID=$(blkid -s UUID -o value \"$ROOT_PART\") && \
+                        printf 'ark-root UUID=%s none luks,discard 0 0\\n' \"$LUKS_UUID\" >> $DEPLOY_ETC/crypttab && \
+                        ROOT_FS_SPEC=\"/dev/mapper/ark-root\"; \
+                      else \
+                        ROOT_UUID=$(blkid -s UUID -o value \"$ROOT_PART\") && \
+                        ROOT_FS_SPEC=\"UUID=$ROOT_UUID\"; \
+                      fi && \
+                      printf '%s /var         btrfs subvol=@var,compress=zstd,noatime 0 0\\n' \"$ROOT_FS_SPEC\" >> $DEPLOY_ETC/fstab && \
+                      printf '%s /var/log     btrfs subvol=@var-log,compress=zstd,noatime 0 0\\n' \"$ROOT_FS_SPEC\" >> $DEPLOY_ETC/fstab && \
+                      printf '%s /var/cache   btrfs subvol=@var-cache,compress=zstd,noatime 0 0\\n' \"$ROOT_FS_SPEC\" >> $DEPLOY_ETC/fstab && \
+                      printf '%s /var/tmp     btrfs subvol=@var-tmp,compress=zstd,noatime 0 0\\n' \"$ROOT_FS_SPEC\" >> $DEPLOY_ETC/fstab && \
+                      printf '%s /tmp         btrfs subvol=@tmp,compress=zstd,noatime 0 0\\n' \"$ROOT_FS_SPEC\" >> $DEPLOY_ETC/fstab && \
+                      printf '%s /.snapshots  btrfs subvol=@snapshots,compress=zstd,noatime,nofail 0 0\\n' \"$ROOT_FS_SPEC\" >> $DEPLOY_ETC/fstab && \
+                      printf '%s /opt         btrfs subvol=@opt,compress=zstd,noatime,nofail 0 0\\n' \"$ROOT_FS_SPEC\" >> $DEPLOY_ETC/fstab && \
+                      printf '%s /nix         btrfs subvol=@nix,compress=zstd,noatime,nofail 0 0\\n' \"$ROOT_FS_SPEC\" >> $DEPLOY_ETC/fstab && \
                       printf 'UUID=%s /boot        vfat  umask=0077 0 2\\n' \"$EFI_UUID\" >> $DEPLOY_ETC/fstab && \
+                      if [ \"$ROOT_DEV\" != \"$ROOT_PART\" ]; then \
+                        mkdir -p /mnt/var/lib && \
+                        cryptsetup luksHeaderBackup \"$ROOT_PART\" --header-backup-file /mnt/var/lib/luks-header.backup && \
+                        chmod 600 /mnt/var/lib/luks-header.backup && \
+                        printf '%s' \"$RECOVERY_KEY\" > /mnt/var/lib/recovery-key.txt 2>/dev/null || true; \
+                      fi && \
                       DEPLOY_NIX_DIR=$(ls -d /tmp/rw_root/ostree/deploy/default/deploy/*/ 2>/dev/null | head -n 1) && \
                       if [ -n \"$DEPLOY_NIX_DIR\" ] && [ -d \"${{DEPLOY_NIX_DIR}}nix\" ]; then \
                         cp -a \"${{DEPLOY_NIX_DIR}}nix/.\" /mnt/nix/; \
@@ -2170,12 +2404,14 @@ fn build_ui(app: &Application) {
                       umount -l /mnt/boot && umount -l /mnt/nix && umount -l /mnt/opt && umount -l /mnt/.snapshots && \
                      umount -l /mnt/tmp && umount -l /mnt/var/tmp && umount -l /mnt/var/cache && \
                      umount -l /mnt/var/log && umount -l /mnt/var && umount -l /mnt",
-                    disk = disk,
-                    variant = variant,
-                    zram = zram_val
-                );
-                
-                let mut child_install = tokio::process::Command::new("pkexec")
+                     disk = disk,
+                     variant = variant,
+                     zram = zram_val,
+                     keyfile = keyfile,
+                     use_tpm2 = use_tpm2_str
+                 );
+                 
+                 let mut child_install = tokio::process::Command::new("pkexec")
                     .args(["bash", "-c", &bootc_cmd])
                     .stdout(Stdio::piped())
                     .stderr(Stdio::piped())
@@ -2221,75 +2457,81 @@ fn build_ui(app: &Application) {
                     Ok(s) if s.success() => {
                         let _ = sender.send("95% Installing bootloader...".to_string());
                         let bootloader_cmd = format!(
-                            "set -e; \
-                             EFI_PART=$(lsblk -rno PATH,FSTYPE {disk} | grep -i 'vfat' | head -n1 | awk '{{print $1}}'); \
-                             ROOT_PART=$(lsblk -rno PATH,FSTYPE {disk} | grep -i 'btrfs' | head -n1 | awk '{{print $1}}'); \
-                             [ -z \"$EFI_PART\" ] && echo 'Error: EFI partition not found' && exit 1; \
-                             [ -z \"$ROOT_PART\" ] && echo 'Error: Root partition not found' && exit 1; \
-                             mkdir -p /tmp/root_mnt /tmp/efi_mnt; \
-                             umount -l /tmp/root_mnt/boot/efi 2>/dev/null || true; \
-                             umount -l /tmp/root_mnt/boot 2>/dev/null || true; \
-                             umount -l /tmp/root_mnt 2>/dev/null || true; \
-                             umount -l /tmp/efi_mnt 2>/dev/null || true; \
-                             mount -t btrfs -o subvol=@ $ROOT_PART /tmp/root_mnt; \
-                             mount $EFI_PART /tmp/efi_mnt; \
-                             DEPLOY_PATH=$(find /tmp/root_mnt/ostree/deploy/default/deploy -maxdepth 1 -name '*.0' -type d | head -n1); \
-                             [ -z \"$DEPLOY_PATH\" ] && echo 'Error: Deploy path not found' && exit 1; \
-                             mkdir -p \"$DEPLOY_PATH/sysroot\" \"$DEPLOY_PATH/ostree\"; \
-                             sed -i 's/transient=true/transient=false/g' /tmp/root_mnt/ostree/repo/config 2>/dev/null || true; \
-                                 if [ \"{grub}\" = \"true\" ]; then \
-                                   sed -i 's/bootloader=none/bootloader=grub2/' /tmp/root_mnt/ostree/repo/config; \
-                                   grub-install --target=x86_64-efi --efi-directory=/tmp/efi_mnt --bootloader-id=ARCHLINUX --boot-directory=/tmp/root_mnt/boot --recheck; \
-                                   ROOT_UUID=$(blkid -s UUID -o value \"$ROOT_PART\"); \
-                                   VMLINUZ=$(find /tmp/root_mnt/boot/ostree -maxdepth 2 -name 'vmlinuz-*' -type f 2>/dev/null | head -n1); \
-                                   INITRAMFS=$(find /tmp/root_mnt/boot/ostree -maxdepth 2 -name 'initramfs-*' -type f 2>/dev/null | head -n1); \
-                                   if [ -z \"$VMLINUZ\" ]; then \
-                                     echo 'Error: Kernel not found in /boot/ostree' && exit 1; \
-                                   fi; \
-                                   OSTREE_PARAM=$(grep -o 'ostree=[^ ]*' /tmp/root_mnt/boot/loader/entries/ostree-*.conf 2>/dev/null | head -n1) || true; \
-                                   [ -z \"$OSTREE_PARAM\" ] && OSTREE_PARAM=\"ostree=0\"; \
-                                   KERNEL_REL=$(echo \"$VMLINUZ\" | sed 's|/tmp/root_mnt||'); \
-                                     INIT_REL=$(echo \"$INITRAMFS\" | sed 's|/tmp/root_mnt||'); \
-                                     {{ \
-                                       echo 'set default=0'; \
-                                       echo 'set timeout=5'; \
-                                       echo 'menuentry \"Arch Linux - Alpha\" {{'; \
-                                       echo '    search --no-floppy --fs-uuid '\"$ROOT_UUID\"' --set=root'; \
-                                       echo '    linux '\"$KERNEL_REL\"' root=UUID='\"$ROOT_UUID\"' rw quiet splash loglevel=3 rd.udev.log_priority=3 vt.global_cursor_default=0 '\"$OSTREE_PARAM\"''; \
-                                       echo '    initrd '\"$INIT_REL\"''; \
-                                       echo '}}'; \
-                                     }} > /tmp/root_mnt/boot/grub/grub.cfg; \
-                             else \
-                               bootctl install --esp-path=/tmp/efi_mnt --boot-path=/tmp/root_mnt/boot 2>/dev/null || bootctl install --esp-path=/tmp/efi_mnt --boot-path=/tmp/root_mnt/boot --no-variables 2>/dev/null || true; \
-                               mkdir -p /tmp/efi_mnt/EFI/BOOT /tmp/efi_mnt/EFI/systemd /tmp/efi_mnt/loader; \
-                               cp /usr/lib/systemd/boot/efi/systemd-bootx64.efi /tmp/efi_mnt/EFI/BOOT/BOOTX64.EFI 2>/dev/null || true; \
-                               cp /usr/lib/systemd/boot/efi/systemd-bootx64.efi /tmp/efi_mnt/EFI/systemd/systemd-bootx64.efi 2>/dev/null || true; \
-                               if [ ! -f /tmp/efi_mnt/loader/loader.conf ]; then \
-                                 echo \"timeout 3\" > /tmp/efi_mnt/loader/loader.conf; \
-                                 echo \"console-mode max\" >> /tmp/efi_mnt/loader/loader.conf; \
-                               fi; \
-                               if [ -d \"/tmp/root_mnt/boot/ostree\" ]; then \
-                                 mkdir -p /tmp/efi_mnt/ostree; \
-                                 cp -r /tmp/root_mnt/boot/ostree/* /tmp/efi_mnt/ostree/ 2>/dev/null || true; \
-                               fi; \
-                               if [ -d \"/tmp/root_mnt/boot/loader/entries\" ]; then \
-                                 mkdir -p /tmp/efi_mnt/loader/entries; \
-                                 cp /tmp/root_mnt/boot/loader/entries/*.conf /tmp/efi_mnt/loader/entries/ 2>/dev/null || true; \
-                                 sed -i 's|/boot/ostree|/ostree|g' /tmp/efi_mnt/loader/entries/*.conf 2>/dev/null || true; \
-                                 for e in /tmp/efi_mnt/loader/entries/*.conf; do [ -f \"$e\" ] && grep -q 'title.*ostree:' \"$e\" 2>/dev/null && rm -f \"$e\"; done; \
-                               fi; \
-                             fi; \
-                             FIRST_DEP=$(ls -1d /tmp/root_mnt/ostree/deploy/default/deploy/*.0 2>/dev/null | head -n1 || true); \
-                             if [ -n \"$FIRST_DEP\" ]; then \
-                               DEP_ID=$(basename \"$FIRST_DEP\"); \
-                               BC=\"${{DEP_ID%.*}}\"; \
-                               BS=\"${{DEP_ID##*.}}\"; \
-                               mkdir -p /tmp/root_mnt/ostree/boot.0/default/$BC 2>/dev/null || true; \
-                               ln -sfn \"../../../deploy/default/deploy/$DEP_ID\" /tmp/root_mnt/ostree/boot.0/default/$BC/$BS 2>/dev/null || true; \
-                             fi;",
-                            disk = disk,
-                            grub = if install_grub { "true" } else { "false" }
-                        );
+                             "set -e; \
+                              EFI_PART=$(lsblk -rno PATH,FSTYPE {disk} | grep -i 'vfat' | head -n1 | awk '{{print $1}}'); \
+                              ROOT_PART=$(lsblk -rno PATH,FSTYPE {disk} | grep -i 'btrfs' | head -n1 | awk '{{print $1}}'); \
+                              if [ -z \"$ROOT_PART\" ] && [ -b /dev/mapper/ark-root ]; then \
+                                ROOT_PART=\"/dev/mapper/ark-root\"; \
+                              fi && \
+                              [ -z \"$EFI_PART\" ] && echo 'Error: EFI partition not found' && exit 1; \
+                              [ -z \"$ROOT_PART\" ] && echo 'Error: Root partition not found' && exit 1; \
+                              mkdir -p /tmp/root_mnt /tmp/efi_mnt; \
+                              umount -l /tmp/root_mnt/boot/efi 2>/dev/null || true; \
+                              umount -l /tmp/root_mnt/boot 2>/dev/null || true; \
+                              umount -l /tmp/root_mnt 2>/dev/null || true; \
+                              umount -l /tmp/efi_mnt 2>/dev/null || true; \
+                              mount -t btrfs -o subvol=@ \"$ROOT_PART\" /tmp/root_mnt; \
+                              mount \"$EFI_PART\" /tmp/efi_mnt; \
+                              DEPLOY_PATH=$(find /tmp/root_mnt/ostree/deploy/default/deploy -maxdepth 1 -name '*.0' -type d | head -n1); \
+                              [ -z \"$DEPLOY_PATH\" ] && echo 'Error: Deploy path not found' && exit 1; \
+                              mkdir -p \"$DEPLOY_PATH/sysroot\" \"$DEPLOY_PATH/ostree\"; \
+                              sed -i 's/transient=true/transient=false/g' /tmp/root_mnt/ostree/repo/config 2>/dev/null || true; \
+                              if [ \"{grub}\" = \"true\" ] && ! echo \"$ROOT_PART\" | grep -q '^/dev/mapper/'; then \
+                                sed -i 's/bootloader=none/bootloader=grub2/' /tmp/root_mnt/ostree/repo/config; \
+                                grub-install --target=x86_64-efi --efi-directory=/tmp/efi_mnt --bootloader-id=ARCHLINUX --boot-directory=/tmp/root_mnt/boot --recheck; \
+                                ROOT_UUID=$(blkid -s UUID -o value \"$ROOT_PART\") && \
+                                VMLINUZ=$(find /tmp/root_mnt/boot/ostree -maxdepth 2 -name 'vmlinuz-*' -type f 2>/dev/null | head -n1); \
+                                INITRAMFS=$(find /tmp/root_mnt/boot/ostree -maxdepth 2 -name 'initramfs-*' -type f 2>/dev/null | head -n1); \
+                                if [ -z \"$VMLINUZ\" ]; then \
+                                  echo 'Error: Kernel not found in /boot/ostree' && exit 1; \
+                                fi; \
+                                OSTREE_PARAM=$(grep -o 'ostree=[^ ]*' /tmp/root_mnt/boot/loader/entries/ostree-*.conf 2>/dev/null | head -n1) || true; \
+                                [ -z \"$OSTREE_PARAM\" ] && OSTREE_PARAM=\"ostree=0\"; \
+                                KERNEL_REL=$(echo \"$VMLINUZ\" | sed 's|/tmp/root_mnt||'); \
+                                INIT_REL=$(echo \"$INITRAMFS\" | sed 's|/tmp/root_mnt||'); \
+                                {{ \
+                                  echo 'set default=0'; \
+                                  echo 'set timeout=5'; \
+                                  echo 'menuentry \"Arch Linux - Alpha\" {{'; \
+                                  echo '    search --no-floppy --fs-uuid '\"$ROOT_UUID\"' --set=root'; \
+                                  echo '    linux '\"$KERNEL_REL\"' root=UUID='\"$ROOT_UUID\"' rw quiet splash loglevel=3 rd.udev.log_priority=3 vt.global_cursor_default=0 '\"$OSTREE_PARAM\"''; \
+                                  echo '    initrd '\"$INIT_REL\"''; \
+                                  echo '}}'; \
+                                }} > /tmp/root_mnt/boot/grub/grub.cfg; \
+                              else \
+                                if echo \"$ROOT_PART\" | grep -q '^/dev/mapper/'; then \
+                                  echo \"Using systemd-boot for encrypted root.\"; \
+                                fi; \
+                                bootctl install --esp-path=/tmp/efi_mnt --boot-path=/tmp/root_mnt/boot 2>/dev/null || bootctl install --esp-path=/tmp/efi_mnt --boot-path=/tmp/root_mnt/boot --no-variables 2>/dev/null || true; \
+                                mkdir -p /tmp/efi_mnt/EFI/BOOT /tmp/efi_mnt/EFI/systemd /tmp/efi_mnt/loader; \
+                                cp /usr/lib/systemd/boot/efi/systemd-bootx64.efi /tmp/efi_mnt/EFI/BOOT/BOOTX64.EFI 2>/dev/null || true; \
+                                cp /usr/lib/systemd/boot/efi/systemd-bootx64.efi /tmp/efi_mnt/EFI/systemd/systemd-bootx64.efi 2>/dev/null || true; \
+                                if [ ! -f /tmp/efi_mnt/loader/loader.conf ]; then \
+                                  echo \"timeout 3\" > /tmp/efi_mnt/loader/loader.conf; \
+                                  echo \"console-mode max\" >> /tmp/efi_mnt/loader/loader.conf; \
+                                fi; \
+                                if [ -d \"/tmp/root_mnt/boot/ostree\" ]; then \
+                                  mkdir -p /tmp/efi_mnt/ostree; \
+                                  cp -r /tmp/root_mnt/boot/ostree/* /tmp/efi_mnt/ostree/ 2>/dev/null || true; \
+                                fi; \
+                                if [ -d \"/tmp/root_mnt/boot/loader/entries\" ]; then \
+                                  mkdir -p /tmp/efi_mnt/loader/entries; \
+                                  cp /tmp/root_mnt/boot/loader/entries/*.conf /tmp/efi_mnt/loader/entries/ 2>/dev/null || true; \
+                                  sed -i 's|/boot/ostree|/ostree|g' /tmp/efi_mnt/loader/entries/*.conf 2>/dev/null || true; \
+                                  for e in /tmp/efi_mnt/loader/entries/*.conf; do [ -f \"$e\" ] && grep -q 'title.*ostree:' \"$e\" 2>/dev/null && rm -f \"$e\"; done; \
+                                fi; \
+                              fi; \
+                              FIRST_DEP=$(ls -1d /tmp/root_mnt/ostree/deploy/default/deploy/*.0 2>/dev/null | head -n1 || true); \
+                              if [ -n \"$FIRST_DEP\" ]; then \
+                                DEP_ID=$(basename \"$FIRST_DEP\"); \
+                                BC=\"${{DEP_ID%.*}}\"; \
+                                BS=\"${{DEP_ID##*.}}\"; \
+                                mkdir -p /tmp/root_mnt/ostree/boot.0/default/$BC 2>/dev/null || true; \
+                                ln -sfn \"../../../deploy/default/deploy/$DEP_ID\" /tmp/root_mnt/ostree/boot.0/default/$BC/$BS 2>/dev/null || true; \
+                              fi;",
+                             disk = disk,
+                             grub = if install_grub { "true" } else { "false" }
+                         );
                         let _ = tokio::process::Command::new("pkexec")
                             .args(["bash", "-c", &bootloader_cmd])
                             .output()
