@@ -2066,7 +2066,9 @@ fn build_ui(app: &Application) {
             let rt = tokio::runtime::Runtime::new().unwrap();
             rt.block_on(async {
                 let bootc_cmd = format!(
-                    "killall -9 bootc skopeo 2>/dev/null || true; \
+                    "pkill -9 udisksd gvfs-udisks2-volume-monitor 2>/dev/null || true; \
+                     sleep 1; \
+                     killall -9 bootc skopeo 2>/dev/null || true; \
                      for p in {disk}*; do umount -l $p 2>/dev/null || true; done; \
                      umount -l /run/bootc/mounts/rootfs 2>/dev/null || true; \
                      btrfs device scan --forget 2>/dev/null || true; \
