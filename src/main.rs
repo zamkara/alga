@@ -2073,19 +2073,14 @@ fn build_ui(app: &Application) {
                      wipefs -af {disk}* 2>/dev/null || true; \
                      for p in {disk}*; do dd if=/dev/zero of=$p bs=1M count=10 status=none 2>/dev/null || true; done; \
                      dd if=/dev/zero of={disk} bs=1M count=10 status=none 2>/dev/null || true; \
-                     partprobe {disk} 2>/dev/null || true; \
-                     udevadm settle 2>/dev/null || true; \
-                     sleep 1 || true; \
                      DISK_BYTES=$(blockdev --getsize64 {disk} 2>/dev/null || echo 0) && \
                      [ \"$DISK_BYTES\" -lt 21474836480 ] && echo \"ERROR: Disk too small ($(( DISK_BYTES / 1024 / 1024 )) MB). Minimum 20 GB required.\" && exit 1; \
-                     printf 'label: gpt\\nsize=1024MiB, type=C12A7328-F81F-11D2-BA4B-00A0C93EC93B, name=EFI-SYSTEM\\ntype=0FC63DAF-8483-4772-8E79-3D69D8477DE4\\n' | sfdisk --wipe always --force --no-reread {disk} && \
                      if echo '{disk}' | grep -qE 'nvme|mmcblk'; then EFI_PART='{disk}p1'; ROOT_PART='{disk}p2'; else EFI_PART='{disk}1'; ROOT_PART='{disk}2'; fi && \
-                     partx -d {disk} 2>/dev/null || true && \
-                     partx -a {disk} 2>/dev/null || true && \
+                     printf 'label: gpt\\nsize=1024MiB, type=C12A7328-F81F-11D2-BA4B-00A0C93EC93B, name=EFI-SYSTEM\\ntype=0FC63DAF-8483-4772-8E79-3D69D8477DE4\\n' | sfdisk --wipe always --force {disk} && \
                      udevadm settle 2>/dev/null || true && \
-                     for _i in 1 2 3 4 5; do \
+                     for _i in 1 2 3 4 5 6 7 8 9 10; do \
                        test -b \"$ROOT_PART\" && break; \
-                       partx -a {disk} 2>/dev/null || true; \
+                       udevadm trigger --action=add {disk} 2>/dev/null || true; \
                        udevadm settle 2>/dev/null || true; \
                        sleep 1; \
                      done && \
