@@ -1499,20 +1499,28 @@ fn build_updater_ui(app: &Application) {
 fn build_ui(app: &Application) {
     let provider = gtk::CssProvider::new();
     provider.load_from_data("
-        .log-container, .log-container textview, .log-container text { 
-            border-radius: 12px; 
+        .log-container, .log-container textview, .log-container text {
+            border-radius: 12px;
         }
         .log-wrapper {
             border-radius: 12px;
             border: none;
         }
+        window, .window-frame,
+        headerbar, .titlebar,
+        scrolledwindow,
+        listview, listview row,
+        list, list row,
+        preferencesgroup > box > box,
+        entry, entry:focus,
+        progressbar trough,
+        progressbar progress { box-shadow: none; }
     ");
     gtk::style_context_add_provider_for_display(
         &gtk::gdk::Display::default().unwrap(),
         &provider,
         gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
     );
-
 
 
     let window = ApplicationWindow::builder()
@@ -1547,7 +1555,6 @@ fn build_ui(app: &Application) {
     let target_enc_mode = Rc::new(RefCell::new(String::from("passphrase")));
     let target_passphrase = Rc::new(RefCell::new(String::new()));
     let target_recovery_key = Rc::new(RefCell::new(String::new()));
-    let has_tpm2 = std::path::Path::new("/sys/class/tpm/tpm0").exists();
     let cancel_sender: Rc<RefCell<Option<oneshot::Sender<()>>>> = Rc::new(RefCell::new(None));
     let pulse_timeout: Rc<RefCell<Option<glib::SourceId>>> = Rc::new(RefCell::new(None));
 
@@ -1762,7 +1769,7 @@ fn build_ui(app: &Application) {
     let grp_enc = PreferencesGroup::builder()
         .description("Protect your data with LUKS2 encryption. A passphrase is required at every boot unless TPM2 is used.")
         .build();
-    let enc_switch = Switch::builder().active(true).valign(gtk::Align::Center).build();
+    let enc_switch = Switch::builder().active(false).valign(gtk::Align::Center).build();
     let row_enc = ActionRow::builder()
         .title("Encrypt Disk")
         .subtitle("Full-disk encryption (recommended)")
@@ -1770,19 +1777,7 @@ fn build_ui(app: &Application) {
     row_enc.add_suffix(&enc_switch);
     grp_enc.add(&row_enc);
 
-    // Group 2: Encryption mode (mirip zRAM ComboRow)
-    let mode_options = if has_tpm2 {
-        gtk::StringList::new(&["Passphrase", "TPM2 Only", "TPM2 + Passphrase"])
-    } else {
-        gtk::StringList::new(&["Passphrase"])
-    };
-    let combo_enc = ComboRow::builder()
-        .title("Unlock Method")
-        .model(&mode_options)
-        .selected(0)
-        .build();
-
-    // Group 3: Passphrase entries — visible hanya jika mode != TPM2 Only
+    // Group 2: Passphrase entries
     let pass_entry = PasswordEntryRow::builder()
         .title("Passphrase")
         .build();
@@ -1803,8 +1798,9 @@ fn build_ui(app: &Application) {
 
     // Layout scrollable
     let scroll_box_enc = Box::new(Orientation::Vertical, 12);
+    scroll_box_enc.set_margin_start(2);
+    scroll_box_enc.set_margin_end(2);
     scroll_box_enc.append(&grp_enc);
-    scroll_box_enc.append(&combo_enc);
     scroll_box_enc.append(&grp_pass);
 
     let scroll_enc = ScrolledWindow::builder()
@@ -1831,22 +1827,14 @@ fn build_ui(app: &Application) {
 
     // --- Encryption Page Signals ---
 
-    // Toggle combo + pass group visibility with encryption switch
-    combo_enc.set_visible(enc_switch.is_active());
-    grp_pass.set_visible(enc_switch.is_active() && combo_enc.selected() != 1);
-    enc_switch.connect_state_set(clone!(@strong combo_enc, @strong grp_pass => @default-return glib::Propagation::Proceed, move |_, state| {
-        combo_enc.set_visible(state);
-        grp_pass.set_visible(state && combo_enc.selected() != 1);
+    grp_pass.set_visible(enc_switch.is_active());
+    enc_switch.connect_state_set(clone!(@strong grp_pass => @default-return glib::Propagation::Proceed, move |_, state| {
+        grp_pass.set_visible(state);
         glib::Propagation::Proceed
     }));
 
-    // Toggle pass group when mode changes
-    combo_enc.connect_selected_notify(clone!(@weak grp_pass, @weak enc_switch => move |row| {
-        grp_pass.set_visible(enc_switch.is_active() && row.selected() != 1);
-    }));
-
     // Passphrase validation + strength indicator
-    let validate_pass = clone!(@weak pass_entry, @weak pass_confirm, @weak strength_label, @weak next_btn_enc, @weak combo_enc, @strong target_passphrase => move || {
+    let validate_pass = clone!(@weak pass_entry, @weak pass_confirm, @weak strength_label, @weak next_btn_enc, @strong target_passphrase => move || {
         let pass = pass_entry.text().as_str().to_string();
         let confirm = pass_confirm.text().as_str().to_string();
         let mut valid = !pass.is_empty() && pass == confirm;
@@ -1890,10 +1878,7 @@ fn build_ui(app: &Application) {
             strength_label.set_visible(false);
         }
 
-        // Enable Next only if valid (or if TPM2 only mode)
-        let mode_idx = combo_enc.selected();
-        let need_pass = mode_idx != 1;
-        next_btn_enc.set_sensitive(!need_pass || valid);
+        next_btn_enc.set_sensitive(valid);
     });
 
     pass_entry.connect_changed(clone!(@strong validate_pass => move |_| {
@@ -1904,21 +1889,11 @@ fn build_ui(app: &Application) {
     }));
 
     // Next button: save state + advance
-    next_btn_enc.connect_clicked(clone!(@weak stack, @strong target_encryption, @strong target_enc_mode, @strong target_passphrase, @weak enc_switch, @weak combo_enc, @weak pass_entry => move |_| {
-        *target_encryption.borrow_mut() = enc_switch.is_active();
-        let mode_id = match combo_enc.selected() {
-            0 => "passphrase",
-            1 => "tpm2-only",
-            _ => "tpm2-passphrase",
-        };
-        *target_enc_mode.borrow_mut() = mode_id.to_string();
-        if !enc_switch.is_active() {
-            *target_passphrase.borrow_mut() = String::new();
-        } else if mode_id == "tpm2-only" {
-            *target_passphrase.borrow_mut() = String::new();
-        } else {
-            *target_passphrase.borrow_mut() = pass_entry.text().as_str().to_string();
-        }
+    next_btn_enc.connect_clicked(clone!(@weak stack, @strong target_encryption, @strong target_enc_mode, @strong target_passphrase, @weak enc_switch, @weak pass_entry => move |_| {
+        let on = enc_switch.is_active();
+        *target_encryption.borrow_mut() = on;
+        *target_enc_mode.borrow_mut() = if on { "passphrase" } else { "" }.to_string();
+        *target_passphrase.borrow_mut() = if on { pass_entry.text().as_str().to_string() } else { String::new() };
         stack.set_visible_child_name("page4");
     }));
 
@@ -2319,13 +2294,15 @@ fn build_ui(app: &Application) {
                       PASSPHRASE=$(cat \"{keyfile}\" 2>/dev/null || true) && rm -f \"{keyfile}\" 2>/dev/null || true && \
                       ROOT_DEV=\"$ROOT_PART\" && \
                       if [ -n \"$PASSPHRASE\" ]; then \
+                        ENROLL_KEY=$(mktemp) && printf '%s' \"$PASSPHRASE\" > \"$ENROLL_KEY\" && \
                         printf '%s' \"$PASSPHRASE\" | cryptsetup luksFormat --type luks2 --pbkdf argon2id --key-file - \"$ROOT_PART\" && \
                         printf '%s' \"$PASSPHRASE\" | cryptsetup open --key-file - \"$ROOT_PART\" ark-root && \
                         ROOT_DEV=\"/dev/mapper/ark-root\" && \
                         if [ -n \"{use_tpm2}\" ]; then \
-                          printf '%s' \"$PASSPHRASE\" | systemd-cryptenroll --tpm2-device=auto --tpm2-pcrs=0+7 \"$ROOT_PART\"; \
+                          systemd-cryptenroll --unlock-key-file=\"$ENROLL_KEY\" --tpm2-device=auto --tpm2-pcrs=0+7 \"$ROOT_PART\"; \
                         fi && \
-                        RECOVERY_KEY=$(printf '%s' \"$PASSPHRASE\" | systemd-cryptenroll --recovery-key \"$ROOT_PART\" 2>&1 | grep -oE '[A-Z0-9]+-[A-Z0-9]+-[A-Z0-9]+-[A-Z0-9]+' || true) && \
+                        RECOVERY_KEY=$(systemd-cryptenroll --unlock-key-file=\"$ENROLL_KEY\" --recovery-key \"$ROOT_PART\" 2>&1 | grep -oE '[A-Z0-9]+-[A-Z0-9]+-[A-Z0-9]+-[A-Z0-9]+' || true) && \
+                        rm -f \"$ENROLL_KEY\" && \
                         [ -n \"$RECOVERY_KEY\" ] && echo \"RECOVERY_KEY=$RECOVERY_KEY\" || true; \
                       fi && \
                       mkfs.vfat -F32 -n EFI-SYSTEM $EFI_PART && \
