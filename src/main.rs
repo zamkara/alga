@@ -2495,7 +2495,7 @@ fn build_ui(app: &Application) {
                                       LUKS_UUID=$(blkid -s UUID -o value \"$LUKS_BACKING\"); \
                                       for e in /tmp/efi_mnt/loader/entries/*.conf; do \
                                         [ -f \"$e\" ] && grep -q '^options ' \"$e\" && \
-                                          sed -i \"/^options /s|$| rd.luks.uuid=$LUKS_UUID|\" \"$e\"; \
+                                          sed -i \"/^options /s|$| rd.luks.name=$LUKS_UUID=ark-root|\" \"$e\"; \
                                       done; \
                                     fi; \
                                   fi; \
