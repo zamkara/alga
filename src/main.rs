@@ -2289,8 +2289,8 @@ fn build_ui(app: &Application) {
                       ROOT_DEV=\"$ROOT_PART\" && \
                       if [ -n \"$PASSPHRASE\" ]; then \
                         ENROLL_KEY=$(mktemp) && printf '%s' \"$PASSPHRASE\" > \"$ENROLL_KEY\" && \
-                        printf '%s' \"$PASSPHRASE\" | cryptsetup luksFormat --type luks2 --pbkdf argon2id --key-file - \"$ROOT_PART\" && \
-                        printf '%s' \"$PASSPHRASE\" | cryptsetup open --key-file - \"$ROOT_PART\" ark-root && \
+                        printf '%s' \"$PASSPHRASE\" | cryptsetup luksFormat --type luks2 --pbkdf argon2id --pbkdf-time 500 --key-file - \"$ROOT_PART\" && \
+                        printf '%s' \"$PASSPHRASE\" | cryptsetup open --perf-no_read_workqueue --perf-no_write_workqueue --persistent --key-file - \"$ROOT_PART\" ark-root && \
                         ROOT_DEV=\"/dev/mapper/ark-root\" && \
                         if [ -n \"{use_tpm2}\" ]; then \
                           systemd-cryptenroll --unlock-key-file=\"$ENROLL_KEY\" --tpm2-device=auto --tpm2-pcrs=0+7 \"$ROOT_PART\"; \
@@ -2489,6 +2489,16 @@ fn build_ui(app: &Application) {
                                   mkdir -p /tmp/efi_mnt/loader/entries; \
                                   cp /tmp/root_mnt/boot/loader/entries/*.conf /tmp/efi_mnt/loader/entries/ 2>/dev/null || true; \
                                   sed -i 's|/boot/ostree|/ostree|g' /tmp/efi_mnt/loader/entries/*.conf 2>/dev/null || true; \
+                                  if [ -b /dev/mapper/ark-root ]; then \
+                                    LUKS_BACKING=$(cryptsetup status ark-root 2>/dev/null | awk '/device:/ {print $2}'); \
+                                    if [ -n \"$LUKS_BACKING\" ]; then \
+                                      LUKS_UUID=$(blkid -s UUID -o value \"$LUKS_BACKING\"); \
+                                      for e in /tmp/efi_mnt/loader/entries/*.conf; do \
+                                        [ -f \"$e\" ] && grep -q '^options ' \"$e\" && \
+                                          sed -i \"/^options /s|$| rd.luks.uuid=$LUKS_UUID|\" \"$e\"; \
+                                      done; \
+                                    fi; \
+                                  fi; \
                                   for e in /tmp/efi_mnt/loader/entries/*.conf; do [ -f \"$e\" ] && grep -q 'title.*ostree:' \"$e\" 2>/dev/null && rm -f \"$e\"; done; \
                                 fi; \
                               fi; \
