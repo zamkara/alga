@@ -305,23 +305,6 @@ $full_staged"
     fi
 fi
 
-# Preserve rollback entries: ESP ostree dirs with kernel files count as known
-# deployments so the cleanup loop never removes entries for pruned-but-valid rollbacks.
-if [ -d "$ESP/ostree" ]; then
-    for _esp_dir in "$ESP/ostree"/*/; do
-        [ -d "$_esp_dir" ] || continue
-        _esp_id=$(basename "$_esp_dir")
-        if printf '%s' "$deployments" | grep -qF "$_esp_id"; then
-            continue
-        fi
-        if ls "$_esp_dir"vmlinuz-* >/dev/null 2>&1; then
-            deployments="$deployments
-$_esp_id"
-            echo "bls-sync: Preserving ESP rollback: $_esp_id"
-        fi
-    done
-fi
-
 echo "bls-sync: Known deployments: $(printf '%s' "$deployments" | tr '\n' ' ')"
 
 mkdir -p "$ESP/loader/entries" "$ESP/ostree"
@@ -387,10 +370,21 @@ for deploy_id in $deployments; do
 
     bootcsum="${deploy_id%.*}"
     bootserial="${deploy_id##*.}"
-    ostree_param="ostree=/ostree/boot.0/default/${bootcsum}/${bootserial}"
-    bootlink_dir="$SYSROOT/ostree/boot.0/default/$bootcsum"
-    mkdir -p "$bootlink_dir" 2>/dev/null || true
-    ln -sfn "../../../deploy/default/deploy/$deploy_id" "$bootlink_dir/$bootserial" 2>/dev/null || true
+    boot_slot=""
+    for slot in boot.0 boot.1; do
+        if [ -L "$SYSROOT/ostree/$slot/default/$bootcsum/$bootserial" ] || \
+           [ -d "$SYSROOT/ostree/$slot/default/$bootcsum/$bootserial" ]; then
+            boot_slot="$slot"
+            break
+        fi
+    done
+    if [ -z "$boot_slot" ]; then
+        boot_slot="boot.0"
+        bootlink_dir="$SYSROOT/ostree/boot.0/default/$bootcsum"
+        mkdir -p "$bootlink_dir" 2>/dev/null || true
+        ln -sfn "../../../deploy/default/deploy/$deploy_id" "$bootlink_dir/$bootserial" 2>/dev/null || true
+    fi
+    ostree_param="ostree=/ostree/$boot_slot/default/${bootcsum}/${bootserial}"
     deploy_date=$(date -r "$deploy_path" "+%Y%m%d%H%M%S" 2>/dev/null || date "+%Y%m%d%H%M%S")
     title="Arch Linux $deploy_date"
 
