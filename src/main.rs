@@ -2490,7 +2490,7 @@ fn build_ui(app: &Application) {
                                   cp /tmp/root_mnt/boot/loader/entries/*.conf /tmp/efi_mnt/loader/entries/ 2>/dev/null || true; \
                                   sed -i 's|/boot/ostree|/ostree|g' /tmp/efi_mnt/loader/entries/*.conf 2>/dev/null || true; \
                                   if [ -b /dev/mapper/ark-root ]; then \
-                                    LUKS_BACKING=$(cryptsetup status ark-root 2>/dev/null | awk '/device:/ {print $2}'); \
+                                    LUKS_BACKING=$(cryptsetup status ark-root 2>/dev/null | awk '/device:/ {{print $2}}'); \
                                     if [ -n \"$LUKS_BACKING\" ]; then \
                                       LUKS_UUID=$(blkid -s UUID -o value \"$LUKS_BACKING\"); \
                                       for e in /tmp/efi_mnt/loader/entries/*.conf; do \
