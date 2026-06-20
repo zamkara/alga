@@ -312,6 +312,17 @@ mkdir -p "$ESP/loader/entries" "$ESP/ostree"
 ROOT_UUID=$(findmnt -n -o UUID "$SYSROOT" 2>/dev/null || blkid -s UUID -o value "$(findmnt -n -o SOURCE "$SYSROOT" 2>/dev/null)" 2>/dev/null || echo "")
 ROOT_SUBVOL=$(findmnt -n -o OPTIONS "$SYSROOT" 2>/dev/null | tr ',' '\n' | grep '^subvol=' | head -1 | sed 's|^subvol=||;s|^/||' || true)
 
+# Detect LUKS-encrypted root
+LUKS_UUID=""
+_root_source=$(findmnt -n -o SOURCE "$SYSROOT" 2>/dev/null || true)
+if echo "$_root_source" | grep -q "^/dev/mapper/"; then
+    _luks_name="${_root_source##*/}"
+    _luks_backing=$(cryptsetup status "$_luks_name" 2>/dev/null | awk '/device:/ {print $2}' || true)
+    if [ -n "$_luks_backing" ]; then
+        LUKS_UUID=$(blkid -s UUID -o value "$_luks_backing" 2>/dev/null || true)
+    fi
+fi
+
 count=0
 for deploy_id in $deployments; do
     deploy_id=$(echo "$deploy_id" | tr -d '\n\r ')
@@ -396,7 +407,13 @@ for deploy_id in $deployments; do
         fi
     done
     if [ -z "$cmdline" ]; then
-        if [ -n "$ROOT_SUBVOL" ] && [ "$ROOT_SUBVOL" != "/" ]; then
+        if [ -n "$LUKS_UUID" ]; then
+            if [ -n "$ROOT_SUBVOL" ] && [ "$ROOT_SUBVOL" != "/" ]; then
+                cmdline="rd.luks.name=$LUKS_UUID=ark-root root=/dev/mapper/ark-root rootflags=subvol=$ROOT_SUBVOL rw quiet splash loglevel=3 rd.udev.log_priority=3"
+            else
+                cmdline="rd.luks.name=$LUKS_UUID=ark-root root=/dev/mapper/ark-root rw quiet splash loglevel=3 rd.udev.log_priority=3"
+            fi
+        elif [ -n "$ROOT_SUBVOL" ] && [ "$ROOT_SUBVOL" != "/" ]; then
             cmdline="root=UUID=$ROOT_UUID rootflags=subvol=$ROOT_SUBVOL rw quiet splash loglevel=3 rd.udev.log_priority=3"
         else
             cmdline="root=UUID=$ROOT_UUID rw quiet splash loglevel=3 rd.udev.log_priority=3"
@@ -2248,8 +2265,19 @@ fn build_ui(app: &Application) {
                      killall -9 bootc skopeo 2>/dev/null || true; \
                      grep -E '^{disk}' /proc/mounts | awk '{{print $2}}' | sort -r | \
                        while read _mp; do umount -f \"$_mp\" 2>/dev/null || umount -l \"$_mp\" 2>/dev/null || true; done; \
-                     for p in {disk}*; do fuser -k \"$p\" 2>/dev/null || true; umount -l \"$p\" 2>/dev/null || true; done; \
+                     for p in {disk}*; do umount -l \"$p\" 2>/dev/null || true; done; \
                      umount -l /run/bootc/mounts/rootfs 2>/dev/null || true; \
+                     umount -R /mnt 2>/dev/null || true; \
+                     umount -l /dev/mapper/ark-root 2>/dev/null || true; \
+                     for _dm in $(dmsetup ls 2>/dev/null | awk '{{print $1}}'); do \
+                       _dm_dev=$(dmsetup info -c --noheadings -o blkdevs_used \"$_dm\" 2>/dev/null || true); \
+                       if echo \"$_dm_dev\" | grep -q \"$(basename {disk})\"; then \
+                         umount -l \"/dev/mapper/$_dm\" 2>/dev/null || true; \
+                         cryptsetup close \"$_dm\" 2>/dev/null || dmsetup remove --force \"$_dm\" 2>/dev/null || true; \
+                       fi; \
+                     done; \
+                     cryptsetup close ark-root 2>/dev/null || true; \
+                     dmsetup remove --force ark-root 2>/dev/null || true; \
                      btrfs device scan --forget 2>/dev/null || true; \
                      wipefs -af {disk}* 2>/dev/null || true; \
                      for p in {disk}*; do dd if=/dev/zero of=\"$p\" bs=1M count=10 status=none 2>/dev/null || true; done; \
@@ -2260,9 +2288,10 @@ fn build_ui(app: &Application) {
                      [ \"$DISK_BYTES\" -lt 21474836480 ] && echo \"ERROR: Disk too small ($(( DISK_BYTES / 1024 / 1024 )) MB). Minimum 20 GB required.\" && exit 1; \
                      if echo '{disk}' | grep -qE 'nvme|mmcblk'; then EFI_PART='{disk}p1'; ROOT_PART='{disk}p2'; else EFI_PART='{disk}1'; ROOT_PART='{disk}2'; fi && \
                      printf 'label: gpt\\nsize=1024MiB, type=C12A7328-F81F-11D2-BA4B-00A0C93EC93B, name=EFI-SYSTEM\\ntype=0FC63DAF-8483-4772-8E79-3D69D8477DE4\\n' | sfdisk --wipe always --force {disk} && \
+                     partprobe {disk} 2>/dev/null || blockdev --rereadpt {disk} 2>/dev/null || true && \
                      udevadm settle 2>/dev/null || true && \
                      for _i in 1 2 3 4 5 6 7 8 9 10; do \
-                       test -b \"$ROOT_PART\" && break; \
+                       test -b \"$EFI_PART\" && test -b \"$ROOT_PART\" && break; \
                        udevadm trigger --action=add --subsystem-match=block 2>/dev/null || true; \
                        udevadm settle 2>/dev/null || true; \
                        sleep 1; \
@@ -2270,8 +2299,9 @@ fn build_ui(app: &Application) {
                      for _p in \"$EFI_PART\" \"$ROOT_PART\"; do \
                        if ! test -b \"$_p\"; then \
                          _n=$(basename \"$_p\"); \
-                         if [ -f \"/sys/class/block/$_n/dev\" ]; then \
-                           _mm=$(cat \"/sys/class/block/$_n/dev\"); \
+                         _mm=$(awk -v n=\"$_n\" -v OFS=: '$4==n {{print $1,$2}}' /proc/partitions 2>/dev/null | head -1); \
+                         if [ -n \"$_mm\" ]; then \
+                           rm -f \"$_p\" 2>/dev/null || true; \
                            mknod \"$_p\" b \"${{_mm%%:*}}\" \"${{_mm##*:}}\" 2>/dev/null || true; \
                          fi; \
                        fi; \
@@ -2285,12 +2315,15 @@ fn build_ui(app: &Application) {
                        exit 1; \
                      }} && \
                       test -b \"$ROOT_PART\" || {{ echo \"ERROR: Root partition $ROOT_PART not found.\"; exit 1; }} && \
-                      PASSPHRASE=$(cat \"{keyfile}\" 2>/dev/null || true) && rm -f \"{keyfile}\" 2>/dev/null || true && \
+                      PASSPHRASE=$([ -n \"{keyfile}\" ] && cat \"{keyfile}\" 2>/dev/null || true) && rm -f \"{keyfile}\" 2>/dev/null || true && \
                       ROOT_DEV=\"$ROOT_PART\" && \
+                      if [ -n \"{keyfile}\" ] && [ -z \"$PASSPHRASE\" ]; then {{ echo \"ERROR: Failed to read passphrase from keyfile\"; exit 1; }}; fi && \
                       if [ -n \"$PASSPHRASE\" ]; then \
                         ENROLL_KEY=$(mktemp) && printf '%s' \"$PASSPHRASE\" > \"$ENROLL_KEY\" && \
-                        printf '%s' \"$PASSPHRASE\" | cryptsetup luksFormat --type luks2 --pbkdf argon2id --pbkdf-time 500 --key-file - \"$ROOT_PART\" && \
-                        printf '%s' \"$PASSPHRASE\" | cryptsetup open --perf-no_read_workqueue --perf-no_write_workqueue --persistent --key-file - \"$ROOT_PART\" ark-root && \
+                        pkill -9 udisksd gvfs-udisks2-volume-monitor 2>/dev/null || true && \
+                        printf '%s' \"$PASSPHRASE\" | cryptsetup luksFormat --type luks2 --pbkdf argon2id --iter-time 2000 --key-file - \"$ROOT_PART\" || {{ echo \"ERROR: cryptsetup luksFormat failed\"; exit 1; }} && \
+                        udevadm settle 2>/dev/null || true && \
+                        _cs_err=$(printf '%s' \"$PASSPHRASE\" | cryptsetup open --key-file - \"$ROOT_PART\" ark-root 2>&1) || {{ echo \"ERROR: cryptsetup open failed: $_cs_err\"; exit 1; }} && \
                         ROOT_DEV=\"/dev/mapper/ark-root\" && \
                         if [ -n \"{use_tpm2}\" ]; then \
                           systemd-cryptenroll --unlock-key-file=\"$ENROLL_KEY\" --tpm2-device=auto --tpm2-pcrs=0+7 \"$ROOT_PART\"; \
@@ -2323,7 +2356,10 @@ fn build_ui(app: &Application) {
                       mount -t btrfs -o subvol=@snapshots $ROOT_DEV /mnt/.snapshots && \
                        mount -t btrfs -o subvol=@opt $ROOT_DEV /mnt/opt && \
                        mount -t btrfs -o subvol=@nix $ROOT_DEV /mnt/nix && \
-                      bootc install to-filesystem --source-imgref docker://{variant} --bootloader none /mnt && \
+                      _bootc_ok=0; for _try in 1 2 3; do \
+                        bootc install to-filesystem --source-imgref docker://{variant} --bootloader none /mnt && {{ _bootc_ok=1; break; }}; \
+                        echo \"bootc install attempt $_try/3 failed, retrying in 5s...\"; sleep 5; \
+                      done; [ \"$_bootc_ok\" = 1 ] || {{ echo \"ERROR: bootc install failed after 3 attempts\"; exit 1; }} && \
                       mount $EFI_PART /mnt/boot && \
                       mkdir -p /tmp/rw_root && \
                       mount -t btrfs -o subvol=@ $ROOT_DEV /tmp/rw_root && \
@@ -2701,8 +2737,11 @@ fn sanitize_log(raw: &str) -> Option<(Option<u32>, String)> {
     
     // 3. Error handling
     if lower.contains("error:") || lower.contains("failed") {
-        if lower.contains("network is unreachable") || lower.contains("unexpected end of file") {
-            return Some((None, "Installation Error: Network connection dropped. Please check your internet and try again.".to_string()));
+        if lower.contains("network is unreachable") {
+            return Some((None, "Installation Error: Network unreachable. Please check your internet connection and try again.".to_string()));
+        }
+        if lower.contains("unexpected end of file") {
+            return Some((None, "Installation Error: Failed to pull OS image from registry (unexpected EOF). This is usually a transient registry error — please try again.".to_string()));
         }
         if lower.contains("device is mounted") || lower.contains("is mounted") || lower.contains("resource busy") || lower.contains("device or resource busy") {
             return Some((None, "Installation Error: The target drive is currently busy. Please reboot and try again.".to_string()));
