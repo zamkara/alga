@@ -316,7 +316,8 @@ ROOT_SUBVOL=$(findmnt -n -o OPTIONS "$SYSROOT" 2>/dev/null | tr ',' '\n' | grep 
 LUKS_UUID=""
 _root_source=$(findmnt -n -o SOURCE "$SYSROOT" 2>/dev/null || true)
 if echo "$_root_source" | grep -q "^/dev/mapper/"; then
-    _luks_name="${_root_source##*/}"
+    _luks_name="${_root_source%%\[*}"
+    _luks_name="${_luks_name##*/}"
     _luks_backing=$(cryptsetup status "$_luks_name" 2>/dev/null | awk '/device:/ {print $2}' || true)
     if [ -n "$_luks_backing" ]; then
         LUKS_UUID=$(blkid -s UUID -o value "$_luks_backing" 2>/dev/null || true)
