@@ -2174,6 +2174,7 @@ fn build_ui(app: &Application) {
         
         let disk = target_disk.borrow().clone();
         let variant = target_variant.borrow().clone();
+        let orundum_tag = variant.split(':').last().unwrap_or("ark").to_string();
         let zram_val = target_zram.borrow().clone();
         let enc_on = target_encryption.borrow().clone();
         let enc_mode = target_enc_mode.borrow().clone();
@@ -2345,9 +2346,10 @@ fn build_ui(app: &Application) {
                       btrfs subvolume create /mnt/@snapshots && \
                        btrfs subvolume create /mnt/@opt && \
                        btrfs subvolume create /mnt/@nix && \
+                       btrfs subvolume create /mnt/@orundum && \
                        umount /mnt && \
                       mount -t btrfs -o subvol=@ $ROOT_DEV /mnt && \
-                       mkdir -p /mnt/var /mnt/tmp /mnt/.snapshots /mnt/opt /mnt/nix && \
+                       mkdir -p /mnt/var /mnt/tmp /mnt/.snapshots /mnt/opt /mnt/nix /mnt/orundum && \
                        mount -t btrfs -o subvol=@var $ROOT_DEV /mnt/var && \
                       mkdir -p /mnt/var/log /mnt/var/cache /mnt/var/tmp && \
                       mount -t btrfs -o subvol=@var-log $ROOT_DEV /mnt/var/log && \
@@ -2357,6 +2359,7 @@ fn build_ui(app: &Application) {
                       mount -t btrfs -o subvol=@snapshots $ROOT_DEV /mnt/.snapshots && \
                        mount -t btrfs -o subvol=@opt $ROOT_DEV /mnt/opt && \
                        mount -t btrfs -o subvol=@nix $ROOT_DEV /mnt/nix && \
+                       mount -t btrfs -o subvol=@orundum $ROOT_DEV /mnt/orundum && \
                       _bootc_ok=0; for _try in 1 2 3; do \
                         bootc install to-filesystem --source-imgref docker://{variant} --bootloader none /mnt && {{ _bootc_ok=1; break; }}; \
                         echo \"bootc install attempt $_try/3 failed, retrying in 5s...\"; sleep 5; \
@@ -2382,6 +2385,7 @@ fn build_ui(app: &Application) {
                       printf '%s /.snapshots  btrfs subvol=@snapshots,compress=zstd,noatime,nofail 0 0\\n' \"$ROOT_FS_SPEC\" >> $DEPLOY_ETC/fstab && \
                       printf '%s /opt         btrfs subvol=@opt,compress=zstd,noatime,nofail 0 0\\n' \"$ROOT_FS_SPEC\" >> $DEPLOY_ETC/fstab && \
                       printf '%s /nix         btrfs subvol=@nix,compress=zstd,noatime,nofail 0 0\\n' \"$ROOT_FS_SPEC\" >> $DEPLOY_ETC/fstab && \
+                      printf '%s /orundum     btrfs subvol=@orundum,compress=zstd,noatime,nofail 0 0\\n' \"$ROOT_FS_SPEC\" >> $DEPLOY_ETC/fstab && \
                       printf 'UUID=%s /boot        vfat  umask=0077 0 2\\n' \"$EFI_UUID\" >> $DEPLOY_ETC/fstab && \
                       if [ \"$ROOT_DEV\" != \"$ROOT_PART\" ]; then \
                         mkdir -p /mnt/var/lib && \
@@ -2408,12 +2412,16 @@ fn build_ui(app: &Application) {
                      else \
                        rm -f $DEPLOY_ETC/systemd/zram-generator.conf; \
                      fi && \
+                     echo '98% Setting up Arch container...' && \
+                     mkdir -p /mnt/orundum/containers && \
+                     podman --root /mnt/orundum/containers/storage --runroot /tmp/orundum-run --storage-driver overlay pull ghcr.io/zamkara/ark-orundum:{orundum_tag} 2>&1 || echo 'Arch container not pulled (no network), distrobox will pull on first use' && \
                      umount -l /tmp/rw_root && \
-                      umount -l /mnt/boot && umount -l /mnt/nix && umount -l /mnt/opt && umount -l /mnt/.snapshots && \
+                      umount -l /mnt/boot && umount -l /mnt/nix && umount -l /mnt/orundum && umount -l /mnt/opt && umount -l /mnt/.snapshots && \
                      umount -l /mnt/tmp && umount -l /mnt/var/tmp && umount -l /mnt/var/cache && \
                      umount -l /mnt/var/log && umount -l /mnt/var && umount -l /mnt",
                      disk = disk,
                      variant = variant,
+                     orundum_tag = orundum_tag,
                      zram = zram_val,
                      keyfile = keyfile,
                      use_tpm2 = use_tpm2_str
