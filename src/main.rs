@@ -2419,7 +2419,7 @@ fn build_ui(app: &Application) {
                      podman --root /mnt/orundum/containers/storage --runroot /tmp/orundum-run --storage-driver overlay pull ghcr.io/zamkara/ark-orundum:{orundum_tag} && \
                      chown -R 1000:1000 /mnt/orundum/containers/storage && \
                      chmod -R a+rX /mnt/orundum/containers/storage && chmod 755 /mnt/orundum /mnt/orundum/containers && chmod 1777 /mnt/orundum/containers/storage && \
-                     printf '#!/bin/bash\ndistrobox create --image ghcr.io/zamkara/ark-orundum:{orundum_tag} --name archlinux --no-entry --yes > /dev/null 2>&1 && {{ distrobox enter archlinux -- distrobox-export --bin /usr/bin/pacman > /dev/null 2>&1; distrobox enter archlinux; }}\n' > $DEPLOY_ETC/archlinux && \
+                     printf '#!/bin/bash\ndistrobox create --image ghcr.io/zamkara/ark-orundum:{orundum_tag} --name archlinux --no-entry --yes > /dev/null 2>&1 && {{ distrobox enter archlinux -- distrobox-export --bin /usr/bin/pacman > /dev/null 2>&1; distrobox enter --root archlinux; }}\n' > $DEPLOY_ETC/archlinux && \
                      chmod +x $DEPLOY_ETC/archlinux && \
                      umount -l /tmp/rw_root && \
                       umount -l /mnt/boot && umount -l /mnt/nix && umount -l /mnt/orundum && umount -l /mnt/opt && umount -l /mnt/.snapshots && \
