@@ -2414,8 +2414,9 @@ fn build_ui(app: &Application) {
                      fi && \
                      echo '98% Setting up Arch container...' && \
                      mkdir -p /mnt/orundum/containers && \
-                     podman --root /mnt/orundum/containers/storage --runroot /tmp/orundum-run --storage-driver overlay pull ghcr.io/zamkara/ark-orundum:{orundum_tag} 2>&1 || echo 'Arch container not pulled (no network), distrobox will pull on first use' && \
-                     printf '#!/bin/bash\ndistrobox create --image ghcr.io/zamkara/ark-orundum:{orundum_tag} --name archlinux --no-entry > /dev/null 2>&1\ndistrobox enter archlinux\n' > $DEPLOY_ETC/archlinux && \
+                     podman --root /mnt/orundum/containers/storage --runroot /tmp/orundum-run --storage-driver overlay pull ghcr.io/zamkara/ark-orundum:{orundum_tag} && \
+                     chmod -R a+rX /mnt/orundum/containers/storage && \
+                     printf '#!/bin/bash\ndistrobox create --image ghcr.io/zamkara/ark-orundum:{orundum_tag} --name archlinux --no-entry --yes > /dev/null 2>&1 && {{ distrobox enter archlinux -- distrobox-export --bin /usr/bin/pacman > /dev/null 2>&1; distrobox enter archlinux; }}\n' > $DEPLOY_ETC/archlinux && \
                      chmod +x $DEPLOY_ETC/archlinux && \
                      umount -l /tmp/rw_root && \
                       umount -l /mnt/boot && umount -l /mnt/nix && umount -l /mnt/orundum && umount -l /mnt/opt && umount -l /mnt/.snapshots && \
