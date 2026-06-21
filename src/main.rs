@@ -2417,7 +2417,7 @@ fn build_ui(app: &Application) {
                      echo '98% Setting up Arch container...' && \
                      mkdir -p /mnt/orundum/containers && \
                      podman --root /mnt/orundum/containers/storage --runroot /tmp/orundum-run --storage-driver overlay pull ghcr.io/zamkara/ark-orundum:{orundum_tag} && \
-                     chmod -R a+rX /mnt/orundum/containers/storage && \
+                     chmod -R a+rX /mnt/orundum/containers/storage && chmod 755 /mnt/orundum /mnt/orundum/containers /mnt/orundum/containers/storage && \
                      printf '#!/bin/bash\ndistrobox create --image ghcr.io/zamkara/ark-orundum:{orundum_tag} --name archlinux --no-entry --yes > /dev/null 2>&1 && {{ distrobox enter archlinux -- distrobox-export --bin /usr/bin/pacman > /dev/null 2>&1; distrobox enter archlinux; }}\n' > $DEPLOY_ETC/archlinux && \
                      chmod +x $DEPLOY_ETC/archlinux && \
                      umount -l /tmp/rw_root && \
