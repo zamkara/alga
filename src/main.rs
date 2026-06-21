@@ -2368,8 +2368,8 @@ fn build_ui(app: &Application) {
                       mkdir -p /tmp/rw_root && \
                       mount -t btrfs -o subvol=@ $ROOT_DEV /tmp/rw_root && \
                       DEPLOY_ETC=$(ls -d /tmp/rw_root/ostree/deploy/default/deploy/*/etc | head -n 1) && \
-                      DEPLOY_ROOT=$(dirname "$DEPLOY_ETC") && \
-                      mkdir -p "$DEPLOY_ROOT/orundum" && \
+                      DEPLOY_ROOT=$(dirname \"$DEPLOY_ETC\") && \
+                      mkdir -p \"$DEPLOY_ROOT/orundum\" && \
                       EFI_UUID=$(blkid -s UUID -o value $EFI_PART) && \
                       if [ \"$ROOT_DEV\" != \"$ROOT_PART\" ]; then \
                         LUKS_UUID=$(blkid -s UUID -o value \"$ROOT_PART\") && \
