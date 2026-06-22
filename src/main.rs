@@ -2174,7 +2174,6 @@ fn build_ui(app: &Application) {
         
         let disk = target_disk.borrow().clone();
         let variant = target_variant.borrow().clone();
-        let orundum_tag = variant.split(':').last().unwrap_or("ark").to_string();
         let zram_val = target_zram.borrow().clone();
         let enc_on = target_encryption.borrow().clone();
         let enc_mode = target_enc_mode.borrow().clone();
@@ -2417,15 +2416,12 @@ fn build_ui(app: &Application) {
                      echo '98% Preparing container storage...' && \
                      mkdir -p /mnt/orundum/containers && \
                      chmod 755 /mnt/orundum && chmod 1777 /mnt/orundum/containers && \
-                     printf '#!/bin/bash\ndistrobox create --image ghcr.io/zamkara/ark-orundum:{orundum_tag} --name archlinux --no-entry --yes > /dev/null 2>&1 || true\n' > $DEPLOY_ETC/archlinux && \
-                     chmod +x $DEPLOY_ETC/archlinux && \
                      umount -l /tmp/rw_root && \
                       umount -l /mnt/boot && umount -l /mnt/nix && umount -l /mnt/orundum && umount -l /mnt/opt && umount -l /mnt/.snapshots && \
                      umount -l /mnt/tmp && umount -l /mnt/var/tmp && umount -l /mnt/var/cache && \
                      umount -l /mnt/var/log && umount -l /mnt/var && umount -l /mnt",
                      disk = disk,
                      variant = variant,
-                     orundum_tag = orundum_tag,
                      zram = zram_val,
                      keyfile = keyfile,
                      use_tpm2 = use_tpm2_str
