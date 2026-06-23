@@ -210,7 +210,7 @@ fn restart_alga() -> ! {
     panic!("exec failed: {}", err);
 }
 
-const BLS_SYNC_SCRIPT: &str = r#"
+const BLS_SYNC_SCRIPT: &str = r#"#!/bin/bash
 set -euo pipefail
 
 SYSROOT="${SYSROOT:-/sysroot}"
@@ -290,6 +290,9 @@ if [ -z "$deployments" ]; then
     exit 0
 fi
 
+# Also include any staged deployment that hasn't been finalized yet.
+# bootc upgrade stages to $DEPLOY_BASE but marks it pending — ensure we create
+# an ESP entry for it so the next boot menu already shows 2 entries.
 staged_file="$SYSROOT/ostree/deploy/default/staged-deployment"
 if [ -f "$staged_file" ]; then
     staged_id=$(grep -oP '"checksum"\s*:\s*"\K[a-f0-9]+' "$staged_file" 2>/dev/null | head -1 || true)
