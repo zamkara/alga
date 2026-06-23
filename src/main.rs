@@ -32,7 +32,7 @@ fn log_to_desktop(msg: &str) {
 #[allow(dead_code)]
 mod nm {
     use gtk::gio;
-    use glib::ToVariant;
+    use glib::prelude::ToVariant;
 
     pub fn system_bus() -> gio::DBusConnection {
         gio::bus_get_sync(gio::BusType::System, None::<&gio::Cancellable>)
@@ -570,7 +570,7 @@ fn build_network_page(sender: std::sync::mpsc::Sender<String>) -> (Box, Rc<dyn F
 
     // Initial check after a short delay so the spinner is visible first
     let check_sender = sender.clone();
-    glib::timeout_add_local_once(std::time::Duration::from_millis(600), clone!(@weak checking_box, @weak offline_box, @weak footer, @weak spinner => move || {
+    glib::timeout_add_local_once(std::time::Duration::from_millis(600), clone!(#[weak] checking_box, #[weak] offline_box, #[weak] footer, #[weak] spinner , move || {
         if nm::is_online() {
             let _ = check_sender.send("connected".to_string());
         } else {
@@ -779,10 +779,10 @@ fn build_updater_ui(app: &Application) {
         .build();
 
     let (net_sender, net_receiver) = std::sync::mpsc::channel::<String>();
-    let (net_page, net_trigger) = build_network_page(net_sender.clone());
+    let (net_page, _net_trigger) = build_network_page(net_sender.clone());
     stack.add_named(&net_page, Some("page0"));
 
-    glib::idle_add_local(clone!(@weak stack => @default-return glib::ControlFlow::Continue, move || {
+    glib::idle_add_local(clone!(#[weak] stack , #[upgrade_or] glib::ControlFlow::Continue, move || {
         while let Ok(msg) = net_receiver.try_recv() {
             if msg == "connected" {
                 let current = stack.visible_child_name().unwrap_or_default().to_string();
@@ -795,7 +795,7 @@ fn build_updater_ui(app: &Application) {
         glib::ControlFlow::Continue
     }));
 
-    stack.connect_visible_child_notify(clone!(@weak stack, @strong net_sender, @strong net_trigger => move |s| {
+    stack.connect_visible_child_notify(clone!(#[strong] net_sender, move |s| {
         let name = s.visible_child_name().unwrap_or_default().to_string();
         if name == "page0" && nm::is_online() {
             let _ = net_sender.send("connected".to_string());
@@ -880,7 +880,6 @@ fn build_updater_ui(app: &Application) {
     stack.add_named(&page1_box, Some("page1"));
 
     // --- Page 2: About App ---
-    let page3_box = Box::new(Orientation::Vertical, 0);
     let content_box3 = Box::new(Orientation::Vertical, 12);
     content_box3.set_margin_top(32);
     content_box3.set_margin_bottom(24);
@@ -966,20 +965,40 @@ fn build_updater_ui(app: &Application) {
         .build();
     footer3.append(&alga_check_btn);
 
-    page3_box.append(&content_box3);
-    page3_box.append(&footer3);
-    stack.add_named(&page3_box, Some("page_about"));
+    // --- About Window (bottom drawer) ---
+    let about_win = gtk::Window::builder()
+        .modal(true)
+        .transient_for(&window)
+        .default_width(360)
+        .default_height(480)
+        .build();
+    let about_header = gtk::HeaderBar::new();
+    about_header.set_show_title_buttons(true);
+    about_win.set_titlebar(Some(&about_header));
+    let about_vbox = Box::new(Orientation::Vertical, 0);
+    let about_scroll = ScrolledWindow::builder().child(&content_box3).vexpand(true).build();
+    about_vbox.append(&about_scroll);
+    about_vbox.append(&footer3);
+    about_win.set_child(Some(&about_vbox));
 
-    // --- Page: Preferences ---
+    // --- Preferences Window (bottom drawer) ---
     let (init_app_interval, init_os_interval) = load_prefs();
 
-    let prefs_page_box = Box::new(Orientation::Vertical, 0);
+    let prefs_win = gtk::Window::builder()
+        .modal(true)
+        .transient_for(&window)
+        .default_width(360)
+        .default_height(240)
+        .build();
+    let prefs_header = gtk::HeaderBar::new();
+    prefs_header.set_show_title_buttons(true);
+    prefs_win.set_titlebar(Some(&prefs_header));
+
     let prefs_content = Box::new(Orientation::Vertical, 16);
     prefs_content.set_margin_top(24);
     prefs_content.set_margin_bottom(24);
     prefs_content.set_margin_start(24);
     prefs_content.set_margin_end(24);
-    prefs_content.set_vexpand(true);
 
     let prefs_group = PreferencesGroup::builder()
         .title("Update Intervals")
@@ -1003,16 +1022,15 @@ fn build_updater_ui(app: &Application) {
     prefs_group.add(&os_interval_row);
 
     prefs_content.append(&prefs_group);
-    prefs_page_box.append(&prefs_content);
-    stack.add_named(&prefs_page_box, Some("page_preferences"));
+    prefs_win.set_child(Some(&prefs_content));
 
     // Save prefs when either combo changes
-    app_interval_row.connect_selected_notify(clone!(@weak os_interval_row => move |row| {
+    app_interval_row.connect_selected_notify(clone!(#[weak] os_interval_row , move |row| {
         let app_key = INTERVAL_KEYS[row.selected() as usize];
         let os_key = INTERVAL_KEYS[os_interval_row.selected() as usize];
         save_prefs(app_key, os_key);
     }));
-    os_interval_row.connect_selected_notify(clone!(@weak app_interval_row => move |row| {
+    os_interval_row.connect_selected_notify(clone!(#[weak] app_interval_row , move |row| {
         let app_key = INTERVAL_KEYS[app_interval_row.selected() as usize];
         let os_key = INTERVAL_KEYS[row.selected() as usize];
         save_prefs(app_key, os_key);
@@ -1066,7 +1084,7 @@ fn build_updater_ui(app: &Application) {
 
     // done_btn action: 0=reboot, 1=restart_alga
     let done_action: Rc<Cell<u8>> = Rc::new(Cell::new(0));
-    done_btn.connect_clicked(clone!(@strong done_action => move |_| {
+    done_btn.connect_clicked(clone!(#[strong] done_action , move |_| {
         if done_action.get() == 1 {
             restart_alga();
         } else {
@@ -1102,36 +1120,22 @@ fn build_updater_ui(app: &Application) {
     menu_btn.set_popover(Some(&popover));
 
     // --- Navigation Logic ---
-    stack.connect_visible_child_notify(clone!(@weak window, @weak back_btn, @weak menu_btn => move |s| {
-        let current = s.visible_child_name().unwrap_or_default().to_string();
-        let show_back = current == "page_about" || current == "page_preferences";
-        back_btn.set_visible(show_back);
-        menu_btn.set_visible(!show_back);
-        match current.as_str() {
-            "page_about" => window.set_title(Some("About App")),
-            "page_preferences" => window.set_title(Some("Preferences")),
-            _ => window.set_title(Some("Software Updater")),
-        }
-    }));
+    back_btn.set_visible(false);
 
-    back_btn.connect_clicked(clone!(@weak stack => move |_| {
-        stack.set_visible_child_name("page1");
-    }));
-
-    menu_prefs_btn.connect_clicked(clone!(@weak stack, @weak popover => move |_| {
+    menu_prefs_btn.connect_clicked(clone!(#[weak] prefs_win, #[weak] popover , move |_| {
         popover.popdown();
-        stack.set_visible_child_name("page_preferences");
+        prefs_win.present();
     }));
 
-    menu_about_btn.connect_clicked(clone!(@weak stack, @weak popover => move |_| {
+    menu_about_btn.connect_clicked(clone!(#[weak] about_win, #[weak] popover , move |_| {
         popover.popdown();
-        stack.set_visible_child_name("page_about");
+        about_win.present();
     }));
 
     // --- State and Handlers for System Updater ---
     let state: Rc<RefCell<u8>> = Rc::new(RefCell::new(0));
 
-    action_btn.connect_clicked(clone!(@weak action_btn, @weak progress_bar, @weak text_view, @weak scrolled, @weak desc, @weak icon, @weak stack, @weak done_title, @weak done_desc, @weak done_btn, @strong state, @strong done_action => move |_| {
+    action_btn.connect_clicked(clone!(#[weak] action_btn, #[weak] progress_bar, #[weak] text_view, #[weak] scrolled, #[weak] desc, #[weak] icon, #[weak] stack, #[weak] done_title, #[weak] done_desc, #[weak] done_btn, #[strong] state, #[strong] done_action , move |_| {
         let s = *state.borrow();
 
         if s == 5 {
@@ -1180,7 +1184,7 @@ fn build_updater_ui(app: &Application) {
                 }
             });
 
-            glib::idle_add_local(clone!(@weak action_btn, @weak desc, @weak icon, @strong state => @default-return glib::ControlFlow::Continue, move || {
+            glib::idle_add_local(clone!(#[weak] action_btn, #[weak] desc, #[weak] icon, #[strong] state , #[upgrade_or] glib::ControlFlow::Continue, move || {
                 while let Ok(msg) = receiver.try_recv() {
                     match msg.as_str() {
                         "UPDATE_AVAILABLE" => {
@@ -1188,14 +1192,14 @@ fn build_updater_ui(app: &Application) {
                             action_btn.set_sensitive(true);
                             action_btn.set_label("Update Now");
                             desc.set_label("A new system update is available. Click Update Now to install.");
-                            icon.set_file(Some("/usr/share/alga/update-available.svg"));
+                            icon.set_from_file(Some("/usr/share/alga/update-available.svg"));
                         }
                         "UP_TO_DATE" => {
                             *state.borrow_mut() = 2;
                             action_btn.set_label("Up to Date");
                             action_btn.set_sensitive(false);
                             desc.set_label("Your system is currently up to date.");
-                            icon.set_file(Some("/usr/share/alga/check-for-update.svg"));
+                            icon.set_from_file(Some("/usr/share/alga/check-for-update.svg"));
                         }
                         _ if msg.starts_with("CHECK_FAILED:") => {
                             *state.borrow_mut() = 3;
@@ -1221,7 +1225,7 @@ fn build_updater_ui(app: &Application) {
             text_view.set_visible(true);
 
             let updating = Rc::new(Cell::new(true));
-            glib::timeout_add_local(std::time::Duration::from_millis(150), clone!(@weak progress_bar, @strong updating => @default-return glib::ControlFlow::Break, move || {
+            glib::timeout_add_local(std::time::Duration::from_millis(150), clone!(#[weak] progress_bar, #[strong] updating , #[upgrade_or] glib::ControlFlow::Break, move || {
                 if !updating.get() {
                     return glib::ControlFlow::Break;
                 }
@@ -1304,7 +1308,7 @@ fn build_updater_ui(app: &Application) {
                 });
             });
 
-            glib::idle_add_local(clone!(@weak text_view, @weak progress_bar, @weak action_btn, @weak desc, @weak icon, @weak stack, @weak done_title, @weak done_desc, @weak done_btn, @strong state, @strong updating, @strong done_action => @default-return glib::ControlFlow::Continue, move || {
+            glib::idle_add_local(clone!(#[weak] text_view, #[weak] progress_bar, #[weak] action_btn, #[weak] desc, #[weak] stack, #[weak] done_title, #[weak] done_desc, #[weak] done_btn, #[strong] state, #[strong] updating, #[strong] done_action , #[upgrade_or] glib::ControlFlow::Continue, move || {
                 while let Ok(text) = receiver.try_recv() {
                     if text == "EOF_SUCCESS" {
                         updating.set(false);
@@ -1369,7 +1373,7 @@ fn build_updater_ui(app: &Application) {
     // --- State and Handlers for App Self-Updater ---
     let alga_update_ver: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
 
-    alga_check_btn.connect_clicked(clone!(@weak alga_check_btn, @weak about_ver, @weak stack, @weak done_title, @weak done_desc, @weak done_btn, @strong alga_update_ver, @strong done_action => move |_| {
+    alga_check_btn.connect_clicked(clone!(#[weak] alga_check_btn, #[weak] about_ver, #[weak] stack, #[weak] done_title, #[weak] done_desc, #[weak] done_btn, #[strong] alga_update_ver, #[strong] done_action , move |_| {
         let pending = alga_update_ver.borrow().clone();
         if let Some(version) = pending {
             alga_check_btn.set_sensitive(false);
@@ -1382,7 +1386,7 @@ fn build_updater_ui(app: &Application) {
                     Err(e) => { let _ = sender.send(format!("ERROR:{}", e)); }
                 }
             });
-            glib::idle_add_local(clone!(@weak alga_check_btn, @weak about_ver, @weak stack, @weak done_title, @weak done_desc, @weak done_btn, @strong alga_update_ver, @strong done_action => @default-return glib::ControlFlow::Continue, move || {
+            glib::idle_add_local(clone!(#[weak] alga_check_btn, #[weak] about_ver, #[weak] stack, #[weak] done_title, #[weak] done_desc, #[weak] done_btn, #[strong] done_action , #[upgrade_or] glib::ControlFlow::Continue, move || {
                 while let Ok(msg) = receiver.try_recv() {
                     if msg == "DONE" {
                         done_action.set(1);
@@ -1410,7 +1414,7 @@ fn build_updater_ui(app: &Application) {
                     Err(e) => { let _ = sender.send(format!("ERROR:{}", e)); }
                 }
             });
-            glib::idle_add_local(clone!(@weak alga_check_btn, @weak about_ver, @strong alga_update_ver => @default-return glib::ControlFlow::Continue, move || {
+            glib::idle_add_local(clone!(#[weak] alga_check_btn, #[weak] about_ver, #[strong] alga_update_ver , #[upgrade_or] glib::ControlFlow::Continue, move || {
                 while let Ok(msg) = receiver.try_recv() {
                     if msg == "UP_TO_DATE" {
                         about_ver.set_label(&format!("v{} (Already up to date)", ALGA_VERSION));
@@ -1489,14 +1493,14 @@ fn build_updater_ui(app: &Application) {
 
         // Register actions for notification buttons
         let show_app_update = gio::SimpleAction::new("show-app-update", None);
-        show_app_update.connect_activate(clone!(@weak stack, @weak window => move |_, _| {
-            stack.set_visible_child_name("page_about");
+        show_app_update.connect_activate(clone!(#[weak] about_win, #[weak] window , move |_, _| {
             window.present();
+            about_win.present();
         }));
         app.add_action(&show_app_update);
 
         let show_os_update = gio::SimpleAction::new("show-os-update", None);
-        show_os_update.connect_activate(clone!(@weak stack, @weak window => move |_, _| {
+        show_os_update.connect_activate(clone!(#[weak] stack, #[weak] window , move |_, _| {
             stack.set_visible_child_name("page1");
             window.present();
         }));
@@ -1538,25 +1542,36 @@ fn build_ui(app: &Application) {
     let window = ApplicationWindow::builder()
         .application(app)
         .title("Arch Linux Installer")
-        .default_width(360)  // Very narrow wizard
-        .default_height(660) // Taller to fit content
+        .default_width(360)
+        .default_height(800)
         .build();
 
     gtk::Window::set_default_icon_name("com.zamkara.alga");
 
-    let main_box = Box::new(Orientation::Vertical, 0);
+    let main_toolbar = libadwaita::ToolbarView::new();
+    main_toolbar.set_top_bar_style(libadwaita::ToolbarStyle::Flat);
     let header_bar = HeaderBar::new();
-    
-    let back_btn = Button::builder()
-        .icon_name("go-previous-symbolic")
-        .visible(false)
-        .build();
-    back_btn.add_css_class("flat");
-    header_bar.pack_start(&back_btn);
-    
-    main_box.append(&header_bar);
+    main_toolbar.add_top_bar(&header_bar);
 
     let stack = Stack::builder()
+        .transition_type(StackTransitionType::SlideLeftRight)
+        .build();
+
+    let drawer_win = libadwaita::Dialog::builder()
+        .content_width(360)
+        .content_height(950)
+        .presentation_mode(libadwaita::DialogPresentationMode::BottomSheet)
+        .build();
+    let drawer_toolbar = libadwaita::ToolbarView::new();
+    drawer_toolbar.set_top_bar_style(libadwaita::ToolbarStyle::Flat);
+    let drawer_header = HeaderBar::new();
+    let drawer_back_btn = Button::builder()
+        .icon_name("go-previous-symbolic")
+        .build();
+    drawer_back_btn.add_css_class("flat");
+    drawer_header.pack_start(&drawer_back_btn);
+    drawer_toolbar.add_top_bar(&drawer_header);
+    let drawer_stack = Stack::builder()
         .transition_type(StackTransitionType::SlideLeftRight)
         .build();
 
@@ -1640,12 +1655,14 @@ fn build_ui(app: &Application) {
     title1.add_css_class("title-2");
     let subtitle1 = Label::builder().label("Please select the internal physical drive where you would like to install your new system. External drives are hidden for your safety.").wrap(true).justify(gtk::Justification::Fill).build();
 
-    content1.append(&app_icon);
-    content1.append(&title1);
-    content1.append(&subtitle1);
-    
-    let spacer1 = Box::builder().vexpand(true).build();
-    content1.append(&spacer1);
+    let title_area = Box::new(Orientation::Vertical, 18);
+    title_area.set_vexpand(true);
+    title_area.set_valign(gtk::Align::Center);
+    title_area.append(&app_icon);
+    title_area.append(&title1);
+    title_area.append(&subtitle1);
+    content1.append(&title_area);
+
     content1.append(&pref_group1);
     
     let scroll1 = ScrolledWindow::builder().child(&content1).vexpand(true).build();
@@ -1663,22 +1680,22 @@ fn build_ui(app: &Application) {
     stack.add_named(&page1_box, Some("page1"));
 
     let (net_sender, net_receiver) = std::sync::mpsc::channel::<String>();
-    let (net_page, net_trigger) = build_network_page(net_sender.clone());
-    stack.add_named(&net_page, Some("page2"));
+    let (net_page, _net_trigger) = build_network_page(net_sender.clone());
+    drawer_stack.add_named(&net_page, Some("page2"));
 
-    glib::idle_add_local(clone!(@weak stack => @default-return glib::ControlFlow::Continue, move || {
+    glib::idle_add_local(clone!(#[weak] drawer_stack , #[upgrade_or] glib::ControlFlow::Continue, move || {
         while let Ok(msg) = net_receiver.try_recv() {
             if msg == "connected" {
-                let current = stack.visible_child_name().unwrap_or_default().to_string();
+                let current = drawer_stack.visible_child_name().unwrap_or_default().to_string();
                 if current == "page2" {
-                    stack.set_visible_child_name("page3");
+                    drawer_stack.set_visible_child_name("page3");
                 }
             }
         }
         glib::ControlFlow::Continue
     }));
 
-    stack.connect_visible_child_notify(clone!(@weak stack, @strong net_sender, @strong net_trigger => move |s| {
+    drawer_stack.connect_visible_child_notify(clone!(#[strong] net_sender, move |s| {
         let name = s.visible_child_name().unwrap_or_default().to_string();
         if name == "page2" && nm::is_online() {
             let _ = net_sender.send("connected".to_string());
@@ -1734,7 +1751,34 @@ fn build_ui(app: &Application) {
     let nv_switch = Switch::builder().active(false).valign(gtk::Align::Center).build();
     row_gnv.add_suffix(&nv_switch);
     grp_kernel.add(&row_gnv);
-    
+
+    // --- Apex Mode Switch ---
+    let row_apex = ActionRow::builder()
+        .title("Apex Mode")
+        .subtitle("Uses the CachyOS kernel, it's faster and more responsive out of the box")
+        .build();
+    let apex_switch = Switch::builder().active(false).valign(gtk::Align::Center).build();
+    row_apex.add_suffix(&apex_switch);
+    grp_kernel.add(&row_apex);
+
+    let apex_hardened_warning = Label::builder()
+        .label("⚠ Apex Hardened combines aggressive security hardening with kernel optimizations. Expect significantly reduced performance.")
+        .wrap(true)
+        .halign(gtk::Align::Start)
+        .margin_start(16)
+        .margin_top(4)
+        .margin_bottom(4)
+        .visible(false)
+        .build();
+    apex_hardened_warning.add_css_class("warning");
+
+    apex_switch.connect_active_notify(clone!(#[weak] k_hardened, #[weak] apex_hardened_warning , move |s| {
+        apex_hardened_warning.set_visible(s.is_active() && k_hardened.is_active());
+    }));
+    k_hardened.connect_active_notify(clone!(#[weak] apex_switch, #[weak] apex_hardened_warning , move |s| {
+        apex_hardened_warning.set_visible(s.is_active() && apex_switch.is_active());
+    }));
+
     // --- zRAM Swap Size ---
     let grp_zram = PreferencesGroup::builder().description("Select the amount of compressed RAM to use as swap space.").build();
     let model_zram = gtk::StringList::new(&["Disabled", "2 GB", "4 GB", "8 GB", "16 GB", "Auto"]);
@@ -1746,6 +1790,7 @@ fn build_ui(app: &Application) {
     let scroll_box = Box::new(Orientation::Vertical, 12);
     let scroll_conf = ScrolledWindow::builder().child(&scroll_box).vexpand(true).build();
     scroll_box.append(&grp_kernel);
+    scroll_box.append(&apex_hardened_warning);
     scroll_box.append(&grp_zram);
     
     content2.append(&scroll_conf);
@@ -1759,7 +1804,7 @@ fn build_ui(app: &Application) {
     let next_btn2 = Button::builder().label("Next").css_classes(["suggested-action"]).hexpand(true).build();
     footer2.append(&next_btn2);
     page2_box.append(&footer2);
-    stack.add_named(&page2_box, Some("page3"));
+    drawer_stack.add_named(&page2_box, Some("page3"));
 
     // --- Encryption Page ---
     let page_enc_box = Box::new(Orientation::Vertical, 0);
@@ -1835,18 +1880,18 @@ fn build_ui(app: &Application) {
         .build();
     footer_enc.append(&next_btn_enc);
     page_enc_box.append(&footer_enc);
-    stack.add_named(&page_enc_box, Some("page_enc"));
+    drawer_stack.add_named(&page_enc_box, Some("page_enc"));
 
     // --- Encryption Page Signals ---
 
     grp_pass.set_visible(enc_switch.is_active());
-    enc_switch.connect_state_set(clone!(@strong grp_pass => @default-return glib::Propagation::Proceed, move |_, state| {
+    enc_switch.connect_state_set(clone!(#[strong] grp_pass, move |_, state| {
         grp_pass.set_visible(state);
         glib::Propagation::Proceed
     }));
 
     // Passphrase validation + strength indicator
-    let validate_pass = clone!(@weak pass_entry, @weak pass_confirm, @weak strength_label, @weak next_btn_enc, @strong target_passphrase => move || {
+    let validate_pass = clone!(#[weak] pass_entry, #[weak] pass_confirm, #[weak] strength_label, #[weak] next_btn_enc, #[strong] target_passphrase , move || {
         let pass = pass_entry.text().as_str().to_string();
         let confirm = pass_confirm.text().as_str().to_string();
         let mut valid = !pass.is_empty() && pass == confirm;
@@ -1893,20 +1938,20 @@ fn build_ui(app: &Application) {
         next_btn_enc.set_sensitive(valid);
     });
 
-    pass_entry.connect_changed(clone!(@strong validate_pass => move |_| {
+    pass_entry.connect_changed(clone!(#[strong] validate_pass , move |_| {
         validate_pass();
     }));
-    pass_confirm.connect_changed(clone!(@strong validate_pass => move |_| {
+    pass_confirm.connect_changed(clone!(#[strong] validate_pass , move |_| {
         validate_pass();
     }));
 
     // Next button: save state + advance
-    next_btn_enc.connect_clicked(clone!(@weak stack, @strong target_encryption, @strong target_enc_mode, @strong target_passphrase, @weak enc_switch, @weak pass_entry => move |_| {
+    next_btn_enc.connect_clicked(clone!(#[weak] drawer_stack, #[strong] target_encryption, #[strong] target_enc_mode, #[strong] target_passphrase, #[weak] enc_switch, #[weak] pass_entry , move |_| {
         let on = enc_switch.is_active();
         *target_encryption.borrow_mut() = on;
         *target_enc_mode.borrow_mut() = if on { "passphrase" } else { "" }.to_string();
         *target_passphrase.borrow_mut() = if on { pass_entry.text().as_str().to_string() } else { String::new() };
-        stack.set_visible_child_name("page4");
+        drawer_stack.set_visible_child_name("page4");
     }));
 
     // --- Page 4: Detailed Confirmation ---
@@ -1971,11 +2016,11 @@ fn build_ui(app: &Application) {
     footer3.append(&erase_btn3);
     page3_box.append(&footer3);
     
-    ack_check.connect_toggled(clone!(@weak erase_btn3 => move |cb| {
+    ack_check.connect_toggled(clone!(#[weak] erase_btn3 , move |cb| {
         erase_btn3.set_sensitive(cb.is_active());
     }));
     
-    stack.add_named(&page3_box, Some("page4"));
+    drawer_stack.add_named(&page3_box, Some("page4"));
 
     // --- Page 5: Progress (Rounded Log Window) ---
     let page4_box = Box::new(Orientation::Vertical, 0);
@@ -2024,7 +2069,7 @@ fn build_ui(app: &Application) {
     footer4.append(&cancel_btn);
     page4_box.append(&footer4);
     
-    stack.add_named(&page4_box, Some("page5"));
+    drawer_stack.add_named(&page4_box, Some("page5"));
 
     // --- Page 6: Success ---
     let page5_box = Box::new(Orientation::Vertical, 0);
@@ -2069,26 +2114,19 @@ fn build_ui(app: &Application) {
     stack.add_named(&page5_box, Some("page6"));
 
     // --- Navigation Logic ---
-    
-    stack.connect_visible_child_notify(clone!(@weak back_btn => move |s| {
-        let current = s.visible_child_name().unwrap_or_default();
-        back_btn.set_visible(current == "page2" || current == "page3" || current == "page_enc" || current == "page4");
-    }));
 
-    back_btn.connect_clicked(clone!(@weak stack => move |_| {
-        let current = stack.visible_child_name().unwrap_or_default();
-        if current == "page2" {
-            stack.set_visible_child_name("page1");
-        } else if current == "page3" {
-            stack.set_visible_child_name("page1");
+    drawer_back_btn.connect_clicked(clone!(#[weak] drawer_stack, #[weak] drawer_win , move |_| {
+        let current = drawer_stack.visible_child_name().unwrap_or_default();
+        if current == "page2" || current == "page3" {
+            drawer_win.close();
         } else if current == "page_enc" {
-            stack.set_visible_child_name("page3");
+            drawer_stack.set_visible_child_name("page3");
         } else if current == "page4" {
-            stack.set_visible_child_name("page_enc");
+            drawer_stack.set_visible_child_name("page_enc");
         }
     }));
     
-    next_btn1.connect_clicked(clone!(@weak stack, @strong disk_radios, @strong target_disk => move |_| {
+    next_btn1.connect_clicked(clone!(#[weak] drawer_stack, #[strong] drawer_win, #[weak] window, #[strong] disk_radios, #[strong] target_disk , move |_| {
         let mut selected = String::new();
         for cb in &disk_radios {
             if cb.is_active() {
@@ -2097,23 +2135,41 @@ fn build_ui(app: &Application) {
         }
         if !selected.is_empty() {
             *target_disk.borrow_mut() = selected;
-            stack.set_visible_child_name("page2");
+            drawer_stack.set_visible_child_name("page2");
+            drawer_win.present(Some(&window));
         }
     }));
     
-    next_btn2.connect_clicked(clone!(@weak stack, @strong target_variant, @strong target_zram, @weak k_zen, @weak k_lts, @weak k_hardened, @weak nv_switch, @weak combo_zram => move |_| {
+    next_btn2.connect_clicked(clone!(#[weak] drawer_stack, #[strong] target_variant, #[strong] target_zram, #[weak] k_zen, #[weak] k_lts, #[weak] k_hardened, #[weak] nv_switch, #[weak] apex_switch, #[weak] combo_zram , move |_| {
         let kernel = if k_zen.is_active() { "zen" }
                      else if k_lts.is_active() { "lts" }
                      else if k_hardened.is_active() { "hardened" }
                      else { "linux" };
-                     
+
         let is_nvidia = nv_switch.is_active();
-        
-        let var_name = match (kernel, is_nvidia) {
-            ("linux", false) => "ark".to_string(),
-            ("linux", true) => "ark-nvidia".to_string(),
-            (k, false) => format!("ark-{}", k),
-            (k, true) => format!("ark-{}-nvidia", k),
+        let is_apex = apex_switch.is_active();
+
+        let var_name = match (kernel, is_apex, is_nvidia) {
+            ("linux",     false, false) => "ark".to_string(),
+            ("linux",     false, true)  => "ark-nvidia".to_string(),
+            ("linux",     true,  false) => "ark-apex".to_string(),
+            ("linux",     true,  true)  => "ark-apex-nvidia".to_string(),
+            ("zen",       false, false) => "ark-zen".to_string(),
+            ("zen",       false, true)  => "ark-zen-nvidia".to_string(),
+            ("zen",       true,  false) => "ark-apex-bore".to_string(),
+            ("zen",       true,  true)  => "ark-apex-bore-nvidia".to_string(),
+            ("lts",       false, false) => "ark-lts".to_string(),
+            ("lts",       false, true)  => "ark-lts-nvidia".to_string(),
+            ("lts",       true,  false) => "ark-apex-lts".to_string(),
+            ("lts",       true,  true)  => "ark-apex-lts-nvidia".to_string(),
+            ("hardened",  false, false) => "ark-hardened".to_string(),
+            ("hardened",  false, true)  => "ark-hardened-nvidia".to_string(),
+            ("hardened",  true,  false) => "ark-apex-hardened".to_string(),
+            ("hardened",  true,  true)  => "ark-apex-hardened-nvidia".to_string(),
+            (k,           false, false) => format!("ark-{}", k),
+            (k,           false, true)  => format!("ark-{}-nvidia", k),
+            (k,           true,  false) => format!("ark-apex-{}", k),
+            (k,           true,  true)  => format!("ark-apex-{}-nvidia", k),
         };
         
         *target_variant.borrow_mut() = format!("ghcr.io/zamkara/ark-image:{}", var_name);
@@ -2128,22 +2184,21 @@ fn build_ui(app: &Application) {
             _ => "auto".to_string(),
         };
         
-        stack.set_visible_child_name("page_enc");
+        drawer_stack.set_visible_child_name("page_enc");
     }));
     
-    cancel_btn.connect_clicked(clone!(@strong cancel_sender, @weak stack, @weak cancel_btn => move |_| {
+    cancel_btn.connect_clicked(clone!(#[strong] cancel_sender, #[weak] drawer_win, #[weak] cancel_btn , move |_| {
         if let Some(sender) = cancel_sender.borrow_mut().take() {
-            let _ = sender.send(()); // Send kill signal
+            let _ = sender.send(());
         } else {
-            // Act as Back button if installation is already finished/failed
-            stack.set_visible_child_name("page1");
+            drawer_win.close();
             cancel_btn.set_label("Cancel Install");
             cancel_btn.add_css_class("destructive-action");
             cancel_btn.remove_css_class("suggested-action");
         }
     }));
     
-    erase_btn3.connect_clicked(clone!(@weak stack, @weak text_view, @weak progress_bar, @weak cancel_btn, @weak title4, @strong target_disk, @strong target_variant, @strong target_zram, @strong cancel_sender, @strong pulse_timeout, @weak grub_switch => move |_| {
+    erase_btn3.connect_clicked(clone!(#[weak] drawer_stack, #[weak] drawer_win, #[weak] stack, #[weak] text_view, #[weak] progress_bar, #[weak] cancel_btn, #[weak] title4, #[strong] target_disk, #[strong] target_variant, #[strong] target_zram, #[strong] cancel_sender, #[strong] pulse_timeout, #[weak] grub_switch , move |_| {
         // Reset UI state for installation/retry
         text_view.buffer().set_text("");
         progress_bar.remove_css_class("error");
@@ -2160,13 +2215,13 @@ fn build_ui(app: &Application) {
             }
         }
 
-        stack.set_visible_child_name("page5");
+        drawer_stack.set_visible_child_name("page5");
         cancel_btn.set_visible(true);
         cancel_btn.set_label("Cancel Install");
         cancel_btn.add_css_class("destructive-action");
         cancel_btn.remove_css_class("suggested-action");
         
-        let source_id = glib::timeout_add_local(std::time::Duration::from_millis(100), clone!(@weak progress_bar => @default-return glib::ControlFlow::Break, move || {
+        let source_id = glib::timeout_add_local(std::time::Duration::from_millis(100), clone!(#[weak] progress_bar , #[upgrade_or] glib::ControlFlow::Break, move || {
             progress_bar.pulse();
             glib::ControlFlow::Continue
         }));
@@ -2197,7 +2252,7 @@ fn build_ui(app: &Application) {
         let (kill_tx, mut kill_rx) = oneshot::channel::<()>();
         *cancel_sender.borrow_mut() = Some(kill_tx);
         
-        glib::idle_add_local(clone!(@weak text_view, @weak progress_bar, @weak stack, @weak cancel_btn, @weak title4, @strong cancel_sender, @strong pulse_timeout, @strong target_recovery_key => @default-return glib::ControlFlow::Continue, move || {
+        glib::idle_add_local(clone!(#[weak] text_view, #[weak] progress_bar, #[weak] drawer_win, #[weak] stack, #[weak] cancel_btn, #[weak] title4, #[strong] cancel_sender, #[strong] pulse_timeout, #[strong] target_recovery_key , #[upgrade_or] glib::ControlFlow::Continue, move || {
             while let Ok(msg) = receiver.try_recv() {
                 // Capture recovery key
                 if let Some(key) = msg.strip_prefix("RECOVERY_KEY=") {
@@ -2219,11 +2274,12 @@ fn build_ui(app: &Application) {
                 }
                 
                 if msg == "EOF_SUCCESS" {
+                    drawer_win.close();
                     stack.set_visible_child_name("page6");
                     return glib::ControlFlow::Break;
                 } else if msg == "EOF_CANCEL" {
                     text_view.buffer().insert(&mut text_view.buffer().end_iter(), "\n[Installation Cancelled]\n");
-                    stack.set_visible_child_name("page1"); 
+                    drawer_win.close();
                     return glib::ControlFlow::Break;
                 } else if msg == "EOF_ERROR" {
                     progress_bar.add_css_class("error");
@@ -2600,8 +2656,12 @@ fn build_ui(app: &Application) {
         let _ = std::process::Command::new("sudo").arg("reboot").status();
     });
 
-    main_box.append(&stack);
-    window.set_content(Some(&main_box));
+    main_toolbar.set_content(Some(&stack));
+    window.set_content(Some(&main_toolbar));
+
+    drawer_toolbar.set_content(Some(&drawer_stack));
+    drawer_win.set_child(Some(&drawer_toolbar));
+
     window.present();
 }
 

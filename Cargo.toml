@@ -4,9 +4,9 @@ version = "1.0.0"
 edition = "2021"
 
 [dependencies]
-gtk = { package = "gtk4", version = "0.7" }
-libadwaita = { version = "0.5", features = ["v1_2"] }
-glib = "0.18"
+gtk = { package = "gtk4", version = "0.10" }
+libadwaita = { version = "0.8", features = ["v1_5"] }
+glib = "0.21"
 tokio = { version = "1.35", features = ["full"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
 semver = "1.0"
