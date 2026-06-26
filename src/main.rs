@@ -2471,8 +2471,10 @@ fn build_ui(app: &Application) {
                        fi; \
                      else \
                        rm -f $DEPLOY_ETC/systemd/zram-generator.conf; \
-                     fi && \
-                     echo '98% Preparing container storage...' && \
+                      fi && \
+                      HOSTNAME=$(cat /sys/class/dmi/id/product_name 2>/dev/null | sed 's/[[:space:]]/-/g; s/[^a-zA-Z0-9-]//g; s/--*/-/g' | head -c 64 || echo \"arklinux\") && \
+                      echo \"$HOSTNAME\" > $DEPLOY_ETC/hostname && \
+                      echo '98% Preparing container storage...' && \
                      mkdir -p /mnt/orundum/containers && \
                      chmod 755 /mnt/orundum && chmod 1777 /mnt/orundum/containers && \
                      umount -l /tmp/rw_root && \
