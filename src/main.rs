@@ -1133,12 +1133,12 @@ fn build_updater_ui(app: &Application) {
     menu_btn.set_popover(Some(&popover));
 
     // --- Navigation Logic ---
-    menu_prefs_btn.connect_clicked(clone!(#[weak] prefs_dialog, #[weak] window, #[weak] popover , move |_| {
+    menu_prefs_btn.connect_clicked(clone!(#[strong] prefs_dialog, #[weak] window, #[weak] popover , move |_| {
         popover.popdown();
         prefs_dialog.present(Some(&window));
     }));
 
-    menu_about_btn.connect_clicked(clone!(#[weak] about_dialog, #[weak] window, #[weak] popover , move |_| {
+    menu_about_btn.connect_clicked(clone!(#[strong] about_dialog, #[weak] window, #[weak] popover , move |_| {
         popover.popdown();
         about_dialog.present(Some(&window));
     }));
@@ -1504,7 +1504,7 @@ fn build_updater_ui(app: &Application) {
 
         // Register actions for notification buttons
         let show_app_update = gio::SimpleAction::new("show-app-update", None);
-        show_app_update.connect_activate(clone!(#[weak] about_dialog, #[weak] window , move |_, _| {
+        show_app_update.connect_activate(clone!(#[strong] about_dialog, #[weak] window , move |_, _| {
             window.present();
             about_dialog.present(Some(&window));
         }));
