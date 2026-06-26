@@ -753,20 +753,14 @@ fn build_updater_ui(app: &Application) {
         .application(app)
         .title("Software Updater")
         .default_width(360)
-        .default_height(660)
+        .default_height(800)
         .build();
 
     gtk::Window::set_default_icon_name("com.zamkara.alga");
 
-    let main_box = Box::new(Orientation::Vertical, 0);
+    let main_toolbar = libadwaita::ToolbarView::new();
+    main_toolbar.set_top_bar_style(libadwaita::ToolbarStyle::Flat);
     let header_bar = HeaderBar::new();
-    
-    let back_btn = Button::builder()
-        .icon_name("go-previous-symbolic")
-        .visible(false)
-        .build();
-    back_btn.add_css_class("flat");
-    header_bar.pack_start(&back_btn);
     
     // --- Popover and Menu Button ---
     let menu_btn = MenuButton::builder()
@@ -775,7 +769,7 @@ fn build_updater_ui(app: &Application) {
     menu_btn.add_css_class("flat");
     header_bar.pack_end(&menu_btn);
 
-    main_box.append(&header_bar);
+    main_toolbar.add_top_bar(&header_bar);
 
     let stack = Stack::builder()
         .transition_type(StackTransitionType::SlideLeftRight)
@@ -968,34 +962,45 @@ fn build_updater_ui(app: &Application) {
         .build();
     footer3.append(&alga_check_btn);
 
-    // --- About Window (bottom drawer) ---
-    let about_win = gtk::Window::builder()
-        .modal(true)
-        .transient_for(&window)
-        .default_width(360)
-        .default_height(480)
+    // --- About Dialog (bottom drawer) ---
+    let about_dialog = libadwaita::Dialog::builder()
+        .content_width(360)
+        .content_height(950)
+        .presentation_mode(libadwaita::DialogPresentationMode::BottomSheet)
         .build();
-    let about_header = gtk::HeaderBar::new();
-    about_header.set_show_title_buttons(true);
-    about_win.set_titlebar(Some(&about_header));
+    let about_toolbar = libadwaita::ToolbarView::new();
+    about_toolbar.set_top_bar_style(libadwaita::ToolbarStyle::Flat);
+    let about_header = HeaderBar::new();
+    let about_close = Button::builder().icon_name("window-close-symbolic").build();
+    about_close.add_css_class("flat");
+    about_header.pack_start(&about_close);
+    about_toolbar.add_top_bar(&about_header);
     let about_vbox = Box::new(Orientation::Vertical, 0);
     let about_scroll = ScrolledWindow::builder().child(&content_box3).vexpand(true).build();
     about_vbox.append(&about_scroll);
     about_vbox.append(&footer3);
-    about_win.set_child(Some(&about_vbox));
+    about_toolbar.set_content(Some(&about_vbox));
+    about_dialog.set_child(Some(&about_toolbar));
 
-    // --- Preferences Window (bottom drawer) ---
+    about_close.connect_clicked(clone!(#[weak] about_dialog, move |_| {
+        about_dialog.close();
+    }));
+
+    // --- Preferences Dialog (bottom drawer) ---
     let (init_app_interval, init_os_interval) = load_prefs();
 
-    let prefs_win = gtk::Window::builder()
-        .modal(true)
-        .transient_for(&window)
-        .default_width(360)
-        .default_height(240)
+    let prefs_dialog = libadwaita::Dialog::builder()
+        .content_width(360)
+        .content_height(950)
+        .presentation_mode(libadwaita::DialogPresentationMode::BottomSheet)
         .build();
-    let prefs_header = gtk::HeaderBar::new();
-    prefs_header.set_show_title_buttons(true);
-    prefs_win.set_titlebar(Some(&prefs_header));
+    let prefs_toolbar = libadwaita::ToolbarView::new();
+    prefs_toolbar.set_top_bar_style(libadwaita::ToolbarStyle::Flat);
+    let prefs_header = HeaderBar::new();
+    let prefs_close = Button::builder().icon_name("window-close-symbolic").build();
+    prefs_close.add_css_class("flat");
+    prefs_header.pack_start(&prefs_close);
+    prefs_toolbar.add_top_bar(&prefs_header);
 
     let prefs_content = Box::new(Orientation::Vertical, 16);
     prefs_content.set_margin_top(24);
@@ -1025,7 +1030,12 @@ fn build_updater_ui(app: &Application) {
     prefs_group.add(&os_interval_row);
 
     prefs_content.append(&prefs_group);
-    prefs_win.set_child(Some(&prefs_content));
+    prefs_toolbar.set_content(Some(&prefs_content));
+    prefs_dialog.set_child(Some(&prefs_toolbar));
+
+    prefs_close.connect_clicked(clone!(#[weak] prefs_dialog, move |_| {
+        prefs_dialog.close();
+    }));
 
     // Save prefs when either combo changes
     app_interval_row.connect_selected_notify(clone!(#[weak] os_interval_row , move |row| {
@@ -1095,8 +1105,8 @@ fn build_updater_ui(app: &Application) {
         }
     }));
 
-    main_box.append(&stack);
-    window.set_content(Some(&main_box));
+    main_toolbar.set_content(Some(&stack));
+    window.set_content(Some(&main_toolbar));
     window.present();
 
     // --- Menu Popover Menu Items ---
@@ -1123,16 +1133,14 @@ fn build_updater_ui(app: &Application) {
     menu_btn.set_popover(Some(&popover));
 
     // --- Navigation Logic ---
-    back_btn.set_visible(false);
-
-    menu_prefs_btn.connect_clicked(clone!(#[weak] prefs_win, #[weak] popover , move |_| {
+    menu_prefs_btn.connect_clicked(clone!(#[weak] prefs_dialog, #[weak] window, #[weak] popover , move |_| {
         popover.popdown();
-        prefs_win.present();
+        prefs_dialog.present(Some(&window));
     }));
 
-    menu_about_btn.connect_clicked(clone!(#[weak] about_win, #[weak] popover , move |_| {
+    menu_about_btn.connect_clicked(clone!(#[weak] about_dialog, #[weak] window, #[weak] popover , move |_| {
         popover.popdown();
-        about_win.present();
+        about_dialog.present(Some(&window));
     }));
 
     // --- State and Handlers for System Updater ---
@@ -1496,9 +1504,9 @@ fn build_updater_ui(app: &Application) {
 
         // Register actions for notification buttons
         let show_app_update = gio::SimpleAction::new("show-app-update", None);
-        show_app_update.connect_activate(clone!(#[weak] about_win, #[weak] window , move |_, _| {
+        show_app_update.connect_activate(clone!(#[weak] about_dialog, #[weak] window , move |_, _| {
             window.present();
-            about_win.present();
+            about_dialog.present(Some(&window));
         }));
         app.add_action(&show_app_update);
 
