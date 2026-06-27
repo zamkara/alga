@@ -1370,7 +1370,7 @@ fn build_updater_ui(app: &Application) {
     // --- State and Handlers for App Self-Updater ---
     let alga_update_ver: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
 
-    alga_check_btn.connect_clicked(clone!(#[weak] alga_check_btn, #[weak] about_ver, #[weak] stack, #[weak] done_title, #[weak] done_desc, #[weak] done_btn, #[strong] alga_update_ver, #[strong] done_action , move |_| {
+    alga_check_btn.connect_clicked(clone!(#[weak] alga_check_btn, #[weak] about_ver, #[weak] about_dialog, #[weak] stack, #[weak] done_title, #[weak] done_desc, #[weak] done_btn, #[strong] alga_update_ver, #[strong] done_action , move |_| {
         let pending = alga_update_ver.borrow().clone();
         if let Some(version) = pending {
             alga_check_btn.set_sensitive(false);
@@ -1383,7 +1383,7 @@ fn build_updater_ui(app: &Application) {
                     Err(e) => { let _ = sender.send(format!("ERROR:{}", e)); }
                 }
             });
-            glib::idle_add_local(clone!(#[weak] alga_check_btn, #[weak] about_ver, #[weak] stack, #[weak] done_title, #[weak] done_desc, #[weak] done_btn, #[strong] done_action , #[upgrade_or] glib::ControlFlow::Continue, move || {
+            glib::idle_add_local(clone!(#[weak] alga_check_btn, #[weak] about_ver, #[weak] about_dialog, #[weak] stack, #[weak] done_title, #[weak] done_desc, #[weak] done_btn, #[strong] done_action , #[upgrade_or] glib::ControlFlow::Continue, move || {
                 while let Ok(msg) = receiver.try_recv() {
                     if msg == "DONE" {
                         done_action.set(1);
@@ -1391,6 +1391,7 @@ fn build_updater_ui(app: &Application) {
                         done_desc.set_label("Restart the app to use the new version.");
                         done_btn.set_label("Restart Alga");
                         stack.set_visible_child_name("page_done");
+                        about_dialog.close();
                     } else if let Some(err) = msg.strip_prefix("ERROR:") {
                         about_ver.set_label(&format!("Download failed: {}", err));
                         alga_check_btn.set_label("Retry");
