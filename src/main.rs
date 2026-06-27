@@ -424,6 +424,7 @@ for deploy_id in $deployments; do
         fi
     fi
     cmdline="$cmdline $ostree_param"
+    cmdline="$cmdline systemd.mount-extra=LABEL=EFI-SYSTEM:/boot:vfat:umask=0077"
 
     entry_file="$ESP/loader/entries/ostree-$deploy_id.conf"
     if ! cat > "$entry_file" <<BLSENTRY
