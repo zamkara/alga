@@ -971,9 +971,6 @@ fn build_updater_ui(app: &Application) {
     let about_toolbar = libadwaita::ToolbarView::new();
     about_toolbar.set_top_bar_style(libadwaita::ToolbarStyle::Flat);
     let about_header = HeaderBar::new();
-    let about_close = Button::builder().icon_name("window-close-symbolic").build();
-    about_close.add_css_class("flat");
-    about_header.pack_start(&about_close);
     about_toolbar.add_top_bar(&about_header);
     let about_vbox = Box::new(Orientation::Vertical, 0);
     let about_scroll = ScrolledWindow::builder().child(&content_box3).vexpand(true).build();
@@ -981,10 +978,6 @@ fn build_updater_ui(app: &Application) {
     about_vbox.append(&footer3);
     about_toolbar.set_content(Some(&about_vbox));
     about_dialog.set_child(Some(&about_toolbar));
-
-    about_close.connect_clicked(clone!(#[weak] about_dialog, move |_| {
-        about_dialog.close();
-    }));
 
     // --- Preferences Dialog (bottom drawer) ---
     let (init_app_interval, init_os_interval) = load_prefs();
@@ -997,9 +990,6 @@ fn build_updater_ui(app: &Application) {
     let prefs_toolbar = libadwaita::ToolbarView::new();
     prefs_toolbar.set_top_bar_style(libadwaita::ToolbarStyle::Flat);
     let prefs_header = HeaderBar::new();
-    let prefs_close = Button::builder().icon_name("window-close-symbolic").build();
-    prefs_close.add_css_class("flat");
-    prefs_header.pack_start(&prefs_close);
     prefs_toolbar.add_top_bar(&prefs_header);
 
     let prefs_content = Box::new(Orientation::Vertical, 16);
@@ -1032,10 +1022,6 @@ fn build_updater_ui(app: &Application) {
     prefs_content.append(&prefs_group);
     prefs_toolbar.set_content(Some(&prefs_content));
     prefs_dialog.set_child(Some(&prefs_toolbar));
-
-    prefs_close.connect_clicked(clone!(#[weak] prefs_dialog, move |_| {
-        prefs_dialog.close();
-    }));
 
     // Save prefs when either combo changes
     app_interval_row.connect_selected_notify(clone!(#[weak] os_interval_row , move |row| {
