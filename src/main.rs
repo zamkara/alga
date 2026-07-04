@@ -210,6 +210,31 @@ fn restart_alga() -> ! {
     panic!("exec failed: {}", err);
 }
 
+fn is_asus_device() -> bool {
+    std::fs::read_to_string("/sys/class/dmi/id/sys_vendor")
+        .map(|v| v.trim().contains("ASUSTeK"))
+        .unwrap_or(false)
+}
+
+fn has_nvidia_gpu() -> bool {
+    let Ok(entries) = std::fs::read_dir("/sys/bus/pci/devices") else {
+        return false;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let vendor = std::fs::read_to_string(path.join("vendor")).unwrap_or_default();
+        let class = std::fs::read_to_string(path.join("class")).unwrap_or_default();
+        if vendor.trim() == "0x10de" && class.trim().starts_with("0x03") {
+            return true;
+        }
+    }
+    false
+}
+
+fn kernel_can_be_asus(kernel: &str) -> bool {
+    kernel == "zen"
+}
+
 const BLS_SYNC_SCRIPT: &str = r#"#!/bin/bash
 set -euo pipefail
 
@@ -1742,14 +1767,19 @@ fn build_ui(app: &Application) {
     grp_kernel.add(&row_klts);
     grp_kernel.add(&row_kh);
     
-    // --- Graphics Switch ---
-    let row_gnv = ActionRow::builder()
-        .title("NVIDIA Drivers")
-        .subtitle("Proprietary high performance driver")
+    // --- Graphics / Optimization Info Row (read-only, auto-detected) ---
+    let row_optimize = ActionRow::builder()
+        .title("NVIDIA Optimized")
+        .subtitle("NVIDIA proprietary driver included")
+        .visible(false)
         .build();
-    let nv_switch = Switch::builder().active(false).valign(gtk::Align::Center).build();
-    row_gnv.add_suffix(&nv_switch);
-    grp_kernel.add(&row_gnv);
+    let opt_icon = Image::builder()
+        .icon_name("emblem-ok-symbolic")
+        .icon_size(gtk::IconSize::Normal)
+        .valign(gtk::Align::Center)
+        .build();
+    row_optimize.add_suffix(&opt_icon);
+    grp_kernel.add(&row_optimize);
 
     // --- Apex Mode Switch ---
     let row_apex = ActionRow::builder()
@@ -1777,6 +1807,45 @@ fn build_ui(app: &Application) {
     k_hardened.connect_active_notify(clone!(#[weak] apex_switch, #[weak] apex_hardened_warning , move |s| {
         apex_hardened_warning.set_visible(s.is_active() && apex_switch.is_active());
     }));
+
+    let sync_opt = {
+        let row = row_optimize.clone();
+        let icon = opt_icon.clone();
+        let kz = k_zen.clone();
+        let kl = k_lts.clone();
+        let kh = k_hardened.clone();
+        move || {
+            let kernel = if kz.is_active() { "zen" }
+                         else if kl.is_active() { "lts" }
+                         else if kh.is_active() { "hardened" }
+                         else { "linux" };
+            let asus_hw = is_asus_device();
+            let nvidia_hw = has_nvidia_gpu();
+            let can_asus = asus_hw && kernel_can_be_asus(kernel);
+            let has_nvidia = !can_asus && nvidia_hw;
+
+            if can_asus {
+                row.set_visible(true);
+                row.set_title("Ark ASUS Optimized");
+                row.set_subtitle("ASUS hardware-specific drivers and optimizations");
+                icon.set_visible(true);
+            } else if has_nvidia {
+                row.set_visible(true);
+                row.set_title("Ark NVIDIA Optimized");
+                row.set_subtitle("NVIDIA proprietary driver included");
+                icon.set_visible(true);
+            } else {
+                row.set_visible(false);
+            }
+        }
+    };
+
+    k_linux.connect_active_notify(clone!(#[strong] sync_opt , move |_| sync_opt()));
+    k_zen.connect_active_notify(clone!(#[strong] sync_opt , move |_| sync_opt()));
+    k_lts.connect_active_notify(clone!(#[strong] sync_opt , move |_| sync_opt()));
+    k_hardened.connect_active_notify(clone!(#[strong] sync_opt , move |_| sync_opt()));
+    apex_switch.connect_active_notify(clone!(#[strong] sync_opt , move |_| sync_opt()));
+    sync_opt();
 
     // --- zRAM Swap Size ---
     let grp_zram = PreferencesGroup::builder().description("Select the amount of compressed RAM to use as swap space.").build();
@@ -2139,36 +2208,34 @@ fn build_ui(app: &Application) {
         }
     }));
     
-    next_btn2.connect_clicked(clone!(#[weak] drawer_stack, #[strong] target_variant, #[strong] target_zram, #[weak] k_zen, #[weak] k_lts, #[weak] k_hardened, #[weak] nv_switch, #[weak] apex_switch, #[weak] combo_zram , move |_| {
+    next_btn2.connect_clicked(clone!(#[weak] drawer_stack, #[strong] target_variant, #[strong] target_zram, #[weak] k_zen, #[weak] k_lts, #[weak] k_hardened, #[weak] apex_switch, #[weak] combo_zram , move |_| {
         let kernel = if k_zen.is_active() { "zen" }
                      else if k_lts.is_active() { "lts" }
                      else if k_hardened.is_active() { "hardened" }
                      else { "linux" };
 
-        let is_nvidia = nv_switch.is_active();
         let is_apex = apex_switch.is_active();
+        let is_asus = is_asus_device() && kernel == "zen";
+        let is_nvidia = has_nvidia_gpu();
 
-        let var_name = match (kernel, is_apex, is_nvidia) {
-            ("linux",     false, false) => "ark".to_string(),
-            ("linux",     false, true)  => "ark-nvidia".to_string(),
-            ("linux",     true,  false) => "ark-apex".to_string(),
-            ("linux",     true,  true)  => "ark-apex-nvidia".to_string(),
-            ("zen",       false, false) => "ark-zen".to_string(),
-            ("zen",       false, true)  => "ark-zen-nvidia".to_string(),
-            ("zen",       true,  false) => "ark-apex-bore".to_string(),
-            ("zen",       true,  true)  => "ark-apex-bore-nvidia".to_string(),
-            ("lts",       false, false) => "ark-lts".to_string(),
-            ("lts",       false, true)  => "ark-lts-nvidia".to_string(),
-            ("lts",       true,  false) => "ark-apex-lts".to_string(),
-            ("lts",       true,  true)  => "ark-apex-lts-nvidia".to_string(),
-            ("hardened",  false, false) => "ark-hardened".to_string(),
-            ("hardened",  false, true)  => "ark-hardened-nvidia".to_string(),
-            ("hardened",  true,  false) => "ark-apex-hardened".to_string(),
-            ("hardened",  true,  true)  => "ark-apex-hardened-nvidia".to_string(),
-            (k,           false, false) => format!("ark-{}", k),
-            (k,           false, true)  => format!("ark-{}-nvidia", k),
-            (k,           true,  false) => format!("ark-apex-{}", k),
-            (k,           true,  true)  => format!("ark-apex-{}-nvidia", k),
+        let var_name = {
+            let base = match (kernel, is_apex) {
+                ("linux",     false) => "ark".to_string(),
+                ("linux",     true)  => "ark-apex".to_string(),
+                ("zen",       false) => "ark-zen".to_string(),
+                ("zen",       true)  => "ark-apex-bore".to_string(),
+                ("lts",       false) => "ark-lts".to_string(),
+                ("lts",       true)  => "ark-apex-lts".to_string(),
+                ("hardened",  false) => "ark-hardened".to_string(),
+                ("hardened",  true)  => "ark-apex-hardened".to_string(),
+                (k,           false) => format!("ark-{}", k),
+                (k,           true)  => format!("ark-apex-{}", k),
+            };
+            let suffix = if is_asus && is_nvidia { "-asus-nvidia" }
+                         else if is_asus { "-asus" }
+                         else if is_nvidia { "-nvidia" }
+                         else { "" };
+            format!("{}{}", base, suffix)
         };
         
         *target_variant.borrow_mut() = format!("ghcr.io/zamkara/ark-image:{}", var_name);
