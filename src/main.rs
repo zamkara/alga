@@ -231,9 +231,6 @@ fn has_nvidia_gpu() -> bool {
     false
 }
 
-fn kernel_can_be_asus(kernel: &str) -> bool {
-    kernel == "zen"
-}
 
 const BLS_SYNC_SCRIPT: &str = r#"#!/bin/bash
 set -euo pipefail
@@ -1767,18 +1764,26 @@ fn build_ui(app: &Application) {
     grp_kernel.add(&row_klts);
     grp_kernel.add(&row_kh);
     
-    // --- Graphics / Optimization Info Row (read-only, auto-detected) ---
+    // --- Hardware Optimization Switch (ASUS / NVIDIA) ---
+    let is_asus_hw = is_asus_device();
+    let is_nvidia_hw = has_nvidia_gpu();
+
     let row_optimize = ActionRow::builder()
-        .title("NVIDIA Optimized")
-        .subtitle("NVIDIA proprietary driver included")
-        .visible(false)
+        .title(if is_asus_hw { "ASUS Optimized" } else if is_nvidia_hw { "NVIDIA Optimized" } else { "" })
+        .subtitle(if is_asus_hw {
+            "ASUS hardware-specific drivers and optimizations"
+        } else if is_nvidia_hw {
+            "NVIDIA proprietary driver included"
+        } else {
+            ""
+        })
+        .visible(is_asus_hw || is_nvidia_hw)
         .build();
-    let opt_icon = Image::builder()
-        .icon_name("emblem-ok-symbolic")
-        .icon_size(gtk::IconSize::Normal)
+    let opt_switch = Switch::builder()
+        .active(is_asus_hw || is_nvidia_hw)
         .valign(gtk::Align::Center)
         .build();
-    row_optimize.add_suffix(&opt_icon);
+    row_optimize.add_suffix(&opt_switch);
     grp_kernel.add(&row_optimize);
 
     // --- Apex Mode Switch ---
@@ -1807,45 +1812,6 @@ fn build_ui(app: &Application) {
     k_hardened.connect_active_notify(clone!(#[weak] apex_switch, #[weak] apex_hardened_warning , move |s| {
         apex_hardened_warning.set_visible(s.is_active() && apex_switch.is_active());
     }));
-
-    let sync_opt = {
-        let row = row_optimize.clone();
-        let icon = opt_icon.clone();
-        let kz = k_zen.clone();
-        let kl = k_lts.clone();
-        let kh = k_hardened.clone();
-        move || {
-            let kernel = if kz.is_active() { "zen" }
-                         else if kl.is_active() { "lts" }
-                         else if kh.is_active() { "hardened" }
-                         else { "linux" };
-            let asus_hw = is_asus_device();
-            let nvidia_hw = has_nvidia_gpu();
-            let can_asus = asus_hw && kernel_can_be_asus(kernel);
-            let has_nvidia = !can_asus && nvidia_hw;
-
-            if can_asus {
-                row.set_visible(true);
-                row.set_title("Ark ASUS Optimized");
-                row.set_subtitle("ASUS hardware-specific drivers and optimizations");
-                icon.set_visible(true);
-            } else if has_nvidia {
-                row.set_visible(true);
-                row.set_title("Ark NVIDIA Optimized");
-                row.set_subtitle("NVIDIA proprietary driver included");
-                icon.set_visible(true);
-            } else {
-                row.set_visible(false);
-            }
-        }
-    };
-
-    k_linux.connect_active_notify(clone!(#[strong] sync_opt , move |_| sync_opt()));
-    k_zen.connect_active_notify(clone!(#[strong] sync_opt , move |_| sync_opt()));
-    k_lts.connect_active_notify(clone!(#[strong] sync_opt , move |_| sync_opt()));
-    k_hardened.connect_active_notify(clone!(#[strong] sync_opt , move |_| sync_opt()));
-    apex_switch.connect_active_notify(clone!(#[strong] sync_opt , move |_| sync_opt()));
-    sync_opt();
 
     // --- zRAM Swap Size ---
     let grp_zram = PreferencesGroup::builder().description("Select the amount of compressed RAM to use as swap space.").build();
@@ -2208,15 +2174,16 @@ fn build_ui(app: &Application) {
         }
     }));
     
-    next_btn2.connect_clicked(clone!(#[weak] drawer_stack, #[strong] target_variant, #[strong] target_zram, #[weak] k_zen, #[weak] k_lts, #[weak] k_hardened, #[weak] apex_switch, #[weak] combo_zram , move |_| {
+    next_btn2.connect_clicked(clone!(#[weak] drawer_stack, #[strong] target_variant, #[strong] target_zram, #[weak] k_zen, #[weak] k_lts, #[weak] k_hardened, #[weak] apex_switch, #[weak] opt_switch, #[weak] combo_zram , move |_| {
         let kernel = if k_zen.is_active() { "zen" }
                      else if k_lts.is_active() { "lts" }
                      else if k_hardened.is_active() { "hardened" }
                      else { "linux" };
 
         let is_apex = apex_switch.is_active();
-        let is_asus = is_asus_device() && kernel == "zen";
-        let is_nvidia = has_nvidia_gpu();
+        let opt_on = opt_switch.is_active();
+        let is_asus_hw = is_asus_device();
+        let is_nvidia_hw = has_nvidia_gpu();
 
         let var_name = {
             let base = match (kernel, is_apex) {
@@ -2231,9 +2198,9 @@ fn build_ui(app: &Application) {
                 (k,           false) => format!("ark-{}", k),
                 (k,           true)  => format!("ark-apex-{}", k),
             };
-            let suffix = if is_asus && is_nvidia { "-asus-nvidia" }
-                         else if is_asus { "-asus" }
-                         else if is_nvidia { "-nvidia" }
+            let suffix = if opt_on && is_asus_hw && kernel == "zen" && is_nvidia_hw { "-asus-nvidia" }
+                         else if opt_on && is_asus_hw && kernel == "zen" { "-asus" }
+                         else if opt_on && !is_asus_hw && is_nvidia_hw { "-nvidia" }
                          else { "" };
             format!("{}{}", base, suffix)
         };
