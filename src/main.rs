@@ -2444,9 +2444,10 @@ fn build_ui(app: &Application) {
                        mount -t btrfs -o subvol=@ $ROOT_DEV /mnt && \
                        mkdir -p /mnt/var /mnt/tmp /mnt/.snapshots /mnt/opt /mnt/nix /mnt/orundum && \
                        mount -t btrfs -o subvol=@var $ROOT_DEV /mnt/var && \
-                      mkdir -p /mnt/var/log /mnt/var/cache /mnt/var/tmp /mnt/var/share /mnt/var/games /mnt/var/log/user /mnt/var/lib && \
-                      mkdir -p /mnt/var/lib/flatpak /mnt/var/lib/containers && \
-                      mount -t btrfs -o subvol=@var-log $ROOT_DEV /mnt/var/log && \
+                       mkdir -p /mnt/var/log /mnt/var/cache /mnt/var/tmp /mnt/var/share /mnt/var/games /mnt/var/lib && \
+                       mkdir -p /mnt/var/lib/flatpak /mnt/var/lib/containers && \
+                       mount -t btrfs -o subvol=@var-log $ROOT_DEV /mnt/var/log && \
+                       mkdir -p /mnt/var/log/user && \
                       mount -t btrfs -o subvol=@var-cache $ROOT_DEV /mnt/var/cache && \
                       mount -t btrfs -o subvol=@var-tmp $ROOT_DEV /mnt/var/tmp && \
                       mount -t btrfs -o subvol=@tmp $ROOT_DEV /mnt/tmp && \
