@@ -1672,7 +1672,7 @@ fn build_ui(app: &Application) {
         pref_group1.add(&ActionRow::builder().title("No physical drives found").build());
     }
 
-    let title1 = Label::builder().label("<b>Welcome to ark OS</b>").use_markup(true).halign(gtk::Align::Center).build();
+    let title1 = Label::builder().label("<b>Welcome to Ark Linux</b>").use_markup(true).halign(gtk::Align::Center).build();
     title1.add_css_class("title-2");
     let subtitle1 = Label::builder().label("Please select the internal physical drive where you would like to install your new system. External drives are hidden for your safety.").wrap(true).justify(gtk::Justification::Fill).build();
 
@@ -2001,7 +2001,7 @@ fn build_ui(app: &Application) {
     title3.add_css_class("title-2");
     
     let info_text = "<b>Action Cannot Be Undone</b>\n\n\
-                     You are about to install ark OS onto your physical drive. \
+                     You are about to install Ark Linux onto your physical drive. \
                      By proceeding, you authorize the installer to reformat the entire device.\n\n\
                      All partitions will be destroyed and all existing operating systems will be erased. \
                      Furthermore, all personal files, documents, and data on this drive will be permanently lost.\n\n\
@@ -2065,7 +2065,7 @@ fn build_ui(app: &Application) {
     content4.set_margin_end(24);
     content4.set_vexpand(true);
     
-    let title4 = Label::builder().label("<b>Installing ark OS...</b>").use_markup(true).halign(gtk::Align::Start).build();
+    let title4 = Label::builder().label("<b>Installing Ark Linux...</b>").use_markup(true).halign(gtk::Align::Start).build();
     title4.add_css_class("title-2");
     
     let progress_bar = ProgressBar::builder().show_text(false).build();
