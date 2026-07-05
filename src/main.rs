@@ -2635,7 +2635,7 @@ fn build_ui(app: &Application) {
                                       done; \
                                     fi; \
                                   fi; \
-                                  for e in /tmp/efi_mnt/loader/entries/*.conf; do [ -f \"$e\" ] && grep -q 'title.*ostree:' \"$e\" 2>/dev/null && rm -f \"$e\"; done; \
+                                  for e in /tmp/efi_mnt/loader/entries/*.conf; do [ -f \"$e\" ] && grep -q 'title.*ostree:[1-9]' \"$e\" 2>/dev/null && rm -f \"$e\"; done; \
                                 fi; \
                               fi; \
                               FIRST_DEP=$(ls -1d /tmp/root_mnt/ostree/deploy/default/deploy/*.0 2>/dev/null | head -n1 || true); \
