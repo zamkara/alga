@@ -2435,11 +2435,17 @@ fn build_ui(app: &Application) {
                        btrfs subvolume create /mnt/@opt && \
                        btrfs subvolume create /mnt/@nix && \
                        btrfs subvolume create /mnt/@orundum && \
+                       btrfs subvolume create /mnt/@share && \
+                       btrfs subvolume create /mnt/@games && \
+                       btrfs subvolume create /mnt/@log-user && \
+                       btrfs subvolume create /mnt/@flatpak && \
+                       btrfs subvolume create /mnt/@containers && \
                        umount /mnt && \
-                      mount -t btrfs -o subvol=@ $ROOT_DEV /mnt && \
+                       mount -t btrfs -o subvol=@ $ROOT_DEV /mnt && \
                        mkdir -p /mnt/var /mnt/tmp /mnt/.snapshots /mnt/opt /mnt/nix /mnt/orundum && \
                        mount -t btrfs -o subvol=@var $ROOT_DEV /mnt/var && \
-                      mkdir -p /mnt/var/log /mnt/var/cache /mnt/var/tmp && \
+                      mkdir -p /mnt/var/log /mnt/var/cache /mnt/var/tmp /mnt/var/share /mnt/var/games /mnt/var/log/user /mnt/var/lib && \
+                      mkdir -p /mnt/var/lib/flatpak /mnt/var/lib/containers && \
                       mount -t btrfs -o subvol=@var-log $ROOT_DEV /mnt/var/log && \
                       mount -t btrfs -o subvol=@var-cache $ROOT_DEV /mnt/var/cache && \
                       mount -t btrfs -o subvol=@var-tmp $ROOT_DEV /mnt/var/tmp && \
@@ -2448,6 +2454,11 @@ fn build_ui(app: &Application) {
                        mount -t btrfs -o subvol=@opt $ROOT_DEV /mnt/opt && \
                        mount -t btrfs -o subvol=@nix $ROOT_DEV /mnt/nix && \
                        mount -t btrfs -o subvol=@orundum $ROOT_DEV /mnt/orundum && \
+                       mount -t btrfs -o subvol=@share $ROOT_DEV /mnt/var/share && \
+                       mount -t btrfs -o subvol=@games $ROOT_DEV /mnt/var/games && \
+                       mount -t btrfs -o subvol=@log-user $ROOT_DEV /mnt/var/log/user && \
+                       mount -t btrfs -o subvol=@flatpak $ROOT_DEV /mnt/var/lib/flatpak && \
+                       mount -t btrfs -o subvol=@containers $ROOT_DEV /mnt/var/lib/containers && \
                       _bootc_ok=0; for _try in 1 2 3; do \
                         bootc install to-filesystem --source-imgref docker://{variant} --bootloader none /mnt && {{ _bootc_ok=1; break; }}; \
                         echo \"bootc install attempt $_try/3 failed, retrying in 5s...\"; sleep 5; \
@@ -2476,6 +2487,11 @@ fn build_ui(app: &Application) {
                       printf '%s /opt         btrfs subvol=@opt,compress=zstd,noatime,nofail 0 0\\n' \"$ROOT_FS_SPEC\" >> $DEPLOY_ETC/fstab && \
                       printf '%s /nix         btrfs subvol=@nix,compress=zstd,noatime,nofail 0 0\\n' \"$ROOT_FS_SPEC\" >> $DEPLOY_ETC/fstab && \
                       printf '%s /orundum     btrfs subvol=@orundum,compress=zstd,noatime,nofail 0 0\\n' \"$ROOT_FS_SPEC\" >> $DEPLOY_ETC/fstab && \
+                      printf '%s /var/share   btrfs subvol=@share,compress=zstd,noatime,nofail 0 0\\n' \"$ROOT_FS_SPEC\" >> $DEPLOY_ETC/fstab && \
+                      printf '%s /var/games   btrfs subvol=@games,compress=zstd,noatime,nofail 0 0\\n' \"$ROOT_FS_SPEC\" >> $DEPLOY_ETC/fstab && \
+                      printf '%s /var/log/user btrfs subvol=@log-user,compress=zstd,noatime,nofail 0 0\\n' \"$ROOT_FS_SPEC\" >> $DEPLOY_ETC/fstab && \
+                      printf '%s /var/lib/flatpak btrfs subvol=@flatpak,compress=zstd,noatime,nofail 0 0\\n' \"$ROOT_FS_SPEC\" >> $DEPLOY_ETC/fstab && \
+                      printf '%s /var/lib/containers btrfs subvol=@containers,compress=zstd,noatime,nofail 0 0\\n' \"$ROOT_FS_SPEC\" >> $DEPLOY_ETC/fstab && \
                       printf 'UUID=%s /boot        vfat  umask=0077 0 2\\n' \"$EFI_UUID\" >> $DEPLOY_ETC/fstab && \
                       if [ \"$ROOT_DEV\" != \"$ROOT_PART\" ]; then \
                         mkdir -p /mnt/var/lib && \
@@ -2504,13 +2520,27 @@ fn build_ui(app: &Application) {
                       fi && \
                       HOSTNAME=$(cat /sys/class/dmi/id/product_name 2>/dev/null | sed 's/[[:space:]]/-/g; s/[^a-zA-Z0-9-]//g; s/--*/-/g' | head -c 64 || echo \"arklinux\") && \
                       echo \"$HOSTNAME\" > $DEPLOY_ETC/hostname && \
-                      echo '98% Preparing container storage...' && \
-                     mkdir -p /mnt/orundum/containers && \
-                     chmod 755 /mnt/orundum && chmod 1777 /mnt/orundum/containers && \
-                     umount -l /tmp/rw_root && \
-                      umount -l /mnt/boot && umount -l /mnt/nix && umount -l /mnt/orundum && umount -l /mnt/opt && umount -l /mnt/.snapshots && \
-                     umount -l /mnt/tmp && umount -l /mnt/var/tmp && umount -l /mnt/var/cache && \
-                     umount -l /mnt/var/log && umount -l /mnt/var && umount -l /mnt",
+                       echo '98% Preparing container storage...' && \
+                      mkdir -p /mnt/orundum/containers && \
+                      chmod 755 /mnt/orundum && chmod 1777 /mnt/orundum/containers && \
+                      echo '98% Preparing shared writable directories...' && \
+                      mkdir -p /mnt/var/share/fonts /mnt/var/share/icons /mnt/var/share/themes /mnt/var/share/backgrounds /mnt/var/share/sounds /mnt/var/share/applications && \
+                      chmod 755 /mnt/var/share && \
+                      chmod 1777 /mnt/var/share/fonts && \
+                      chmod 1777 /mnt/var/share/icons && \
+                      chmod 1777 /mnt/var/share/themes && \
+                      chmod 1777 /mnt/var/share/backgrounds && \
+                      chmod 1777 /mnt/var/share/sounds && \
+                      chmod 1777 /mnt/var/share/applications && \
+                      chmod 1777 /mnt/var/games && \
+                      chmod 1777 /mnt/var/log/user && \
+                      umount -l /tmp/rw_root && \
+                       umount -l /mnt/boot && umount -l /mnt/nix && umount -l /mnt/orundum && \
+                      umount -l /mnt/var/share && umount -l /mnt/var/games && umount -l /mnt/var/log/user && \
+                      umount -l /mnt/var/lib/flatpak && umount -l /mnt/var/lib/containers && \
+                      umount -l /mnt/opt && umount -l /mnt/.snapshots && \
+                      umount -l /mnt/tmp && umount -l /mnt/var/tmp && umount -l /mnt/var/cache && \
+                      umount -l /mnt/var/log && umount -l /mnt/var && umount -l /mnt",
                      disk = disk,
                      variant = variant,
                      zram = zram_val,
