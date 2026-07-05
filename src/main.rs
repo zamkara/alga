@@ -2205,7 +2205,7 @@ fn build_ui(app: &Application) {
             format!("{}{}", base, suffix)
         };
         
-        *target_variant.borrow_mut() = format!("ghcr.io/zamkara/ark-image:{}", var_name);
+        *target_variant.borrow_mut() = var_name;
         
         let zram_idx = combo_zram.selected();
         *target_zram.borrow_mut() = match zram_idx {
@@ -2460,10 +2460,21 @@ fn build_ui(app: &Application) {
                        mount -t btrfs -o subvol=@log-user $ROOT_DEV /mnt/var/log/user && \
                        mount -t btrfs -o subvol=@flatpak $ROOT_DEV /mnt/var/lib/flatpak && \
                        mount -t btrfs -o subvol=@containers $ROOT_DEV /mnt/var/lib/containers && \
-                      _bootc_ok=0; for _try in 1 2 3; do \
-                        bootc install to-filesystem --source-imgref docker://{variant} --bootloader none /mnt && {{ _bootc_ok=1; break; }}; \
-                        echo \"bootc install attempt $_try/3 failed, retrying in 5s...\"; sleep 5; \
-                      done; [ \"$_bootc_ok\" = 1 ] || {{ echo \"ERROR: bootc install failed after 3 attempts\"; exit 1; }} && \
+                       _bootc_ok=0; \
+                       _primary=\"quay.io/arklinux/gnome:{variant}\"; \
+                       _fallback=\"ghcr.io/zamkara/ark-image:{variant}\"; \
+                       for _try in 1 2 3; do \
+                         bootc install to-filesystem --source-imgref docker://$_primary --bootloader none /mnt && {{ _bootc_ok=1; break; }}; \
+                         echo \"bootc install attempt $_try/3 (quay.io) failed, retrying in 5s...\"; sleep 5; \
+                       done; \
+                       if [ \"$_bootc_ok\" != 1 ]; then \
+                         echo \"Falling back to ghcr.io...\"; \
+                         for _try in 1 2 3; do \
+                           bootc install to-filesystem --source-imgref docker://$_fallback --bootloader none /mnt && {{ _bootc_ok=1; break; }}; \
+                           echo \"bootc install attempt $_try/3 (ghcr.io) failed, retrying in 5s...\"; sleep 5; \
+                         done; \
+                       fi; \
+                       [ \"$_bootc_ok\" = 1 ] || {{ echo \"ERROR: bootc install failed after 6 total attempts\"; exit 1; }} && \
                       mount $EFI_PART /mnt/boot && \
                       mkdir -p /tmp/rw_root && \
                       mount -t btrfs -o subvol=@ $ROOT_DEV /tmp/rw_root && \
