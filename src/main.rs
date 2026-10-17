@@ -2435,6 +2435,7 @@ fn build_ui(app: &Application) {
                        btrfs subvolume create /mnt/@opt && \
                        btrfs subvolume create /mnt/@nix && \
                        btrfs subvolume create /mnt/@orundum && \
+                       btrfs subvolume create /mnt/@agents && \
                        btrfs subvolume create /mnt/@share && \
                        btrfs subvolume create /mnt/@games && \
                        btrfs subvolume create /mnt/@log-user && \
@@ -2442,7 +2443,7 @@ fn build_ui(app: &Application) {
                        btrfs subvolume create /mnt/@containers && \
                        umount /mnt && \
                        mount -t btrfs -o subvol=@ $ROOT_DEV /mnt && \
-                       mkdir -p /mnt/var /mnt/tmp /mnt/.snapshots /mnt/opt /mnt/nix /mnt/orundum && \
+                       mkdir -p /mnt/var /mnt/tmp /mnt/.snapshots /mnt/opt /mnt/nix /mnt/orundum /mnt/agents && \
                        mount -t btrfs -o subvol=@var $ROOT_DEV /mnt/var && \
                        mkdir -p /mnt/var/log /mnt/var/cache /mnt/var/tmp /mnt/var/share /mnt/var/games /mnt/var/lib && \
                        mkdir -p /mnt/var/lib/flatpak /mnt/var/lib/containers && \
@@ -2455,6 +2456,7 @@ fn build_ui(app: &Application) {
                        mount -t btrfs -o subvol=@opt $ROOT_DEV /mnt/opt && \
                        mount -t btrfs -o subvol=@nix $ROOT_DEV /mnt/nix && \
                        mount -t btrfs -o subvol=@orundum $ROOT_DEV /mnt/orundum && \
+                       mount -t btrfs -o subvol=@agents,nodev,nosuid $ROOT_DEV /mnt/agents && \
                        mount -t btrfs -o subvol=@share $ROOT_DEV /mnt/var/share && \
                        mount -t btrfs -o subvol=@games $ROOT_DEV /mnt/var/games && \
                        mount -t btrfs -o subvol=@log-user $ROOT_DEV /mnt/var/log/user && \
@@ -2480,7 +2482,7 @@ fn build_ui(app: &Application) {
                       mount -t btrfs -o subvol=@ $ROOT_DEV /tmp/rw_root && \
                       DEPLOY_ETC=$(ls -d /tmp/rw_root/ostree/deploy/default/deploy/*/etc | head -n 1) && \
                       DEPLOY_ROOT=$(dirname \"$DEPLOY_ETC\") && \
-                      mkdir -p \"$DEPLOY_ROOT/orundum\" && \
+                      mkdir -p \"$DEPLOY_ROOT/orundum\" \"$DEPLOY_ROOT/agents\" && \
                       EFI_UUID=$(blkid -s UUID -o value $EFI_PART) && \
                       if [ \"$ROOT_DEV\" != \"$ROOT_PART\" ]; then \
                         LUKS_UUID=$(blkid -s UUID -o value \"$ROOT_PART\") && \
@@ -2499,6 +2501,7 @@ fn build_ui(app: &Application) {
                       printf '%s /opt         btrfs subvol=@opt,compress=zstd,noatime,nofail 0 0\\n' \"$ROOT_FS_SPEC\" >> $DEPLOY_ETC/fstab && \
                       printf '%s /nix         btrfs subvol=@nix,compress=zstd,noatime,nofail 0 0\\n' \"$ROOT_FS_SPEC\" >> $DEPLOY_ETC/fstab && \
                       printf '%s /orundum     btrfs subvol=@orundum,compress=zstd,noatime,nofail 0 0\\n' \"$ROOT_FS_SPEC\" >> $DEPLOY_ETC/fstab && \
+                      printf '%s /agents      btrfs subvol=@agents,compress=zstd,noatime,nodev,nosuid,nofail 0 0\\n' \"$ROOT_FS_SPEC\" >> $DEPLOY_ETC/fstab && \
                       printf '%s /var/share   btrfs subvol=@share,compress=zstd,noatime,nofail 0 0\\n' \"$ROOT_FS_SPEC\" >> $DEPLOY_ETC/fstab && \
                       printf '%s /var/games   btrfs subvol=@games,compress=zstd,noatime,nofail 0 0\\n' \"$ROOT_FS_SPEC\" >> $DEPLOY_ETC/fstab && \
                       printf '%s /var/log/user btrfs subvol=@log-user,compress=zstd,noatime,nofail 0 0\\n' \"$ROOT_FS_SPEC\" >> $DEPLOY_ETC/fstab && \
@@ -2547,7 +2550,7 @@ fn build_ui(app: &Application) {
                       chmod 1777 /mnt/var/games && \
                       chmod 1777 /mnt/var/log/user && \
                       umount -l /tmp/rw_root && \
-                       umount -l /mnt/boot && umount -l /mnt/nix && umount -l /mnt/orundum && \
+                       umount -l /mnt/boot && umount -l /mnt/nix && umount -l /mnt/agents && umount -l /mnt/orundum && \
                       umount -l /mnt/var/share && umount -l /mnt/var/games && umount -l /mnt/var/log/user && \
                       umount -l /mnt/var/lib/flatpak && umount -l /mnt/var/lib/containers && \
                       umount -l /mnt/opt && umount -l /mnt/.snapshots && \

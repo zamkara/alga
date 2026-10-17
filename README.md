@@ -32,6 +32,18 @@ The installer partitions the target disk as follows:
 | `@tmp` | `/tmp` |
 | `@snapshots` | `/.snapshots` |
 | `@opt` | `/opt` |
+| `@nix` | `/nix` |
+| `@orundum` | `/orundum` |
+| `@agents` | `/agents` |
+| `@share` | `/var/share` |
+| `@games` | `/var/games` |
+| `@log-user` | `/var/log/user` |
+| `@flatpak` | `/var/lib/flatpak` |
+| `@containers` | `/var/lib/containers` |
+
+`/agents` stores per-user agent workspaces and state. The installed image prepares
+`~/Work` after the user account exists; live ISO accounts do not provision this data.
+The mount uses `nodev,nosuid` and remains independent of OS rollback.
 
 All btrfs mounts use `compress=zstd,noatime` options. The `@snapshots` subvolume is compatible with Timeshift.
 

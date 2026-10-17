@@ -8,6 +8,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: alga-release
+  cancel-in-progress: false
+
 jobs:
   build-arch-package:
     runs-on: ubuntu-latest
@@ -61,13 +65,13 @@ jobs:
           }
           EOF
           
-          sudo podman run --rm --privileged -v $(pwd):/work -v $(pwd)/pacman-cache:/var/cache/pacman/pkg -v $(pwd)/cargo-cache:/home/builduser/.cargo -w /work docker.io/archlinux:latest bash -c "
+          sudo podman run --rm --privileged -v $(pwd):/work -v $(pwd)/pacman-cache:/var/cache/pacman/pkg -v $(pwd)/cargo-cache:/home/builduser/.cargo -w /work docker.io/archlinux:latest bash -e -o pipefail -c "
             pacman -Syu --noconfirm base-devel sudo rust nasm
             useradd -m builduser || true
             chown -R builduser:builduser /home/builduser
             echo 'builduser ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/builduser
             chown -R builduser:builduser /work
-            sudo -u builduser bash -c 'cd /work && makepkg -s --noconfirm'
+            sudo -u builduser bash -e -o pipefail -c 'cd /work && makepkg -s --noconfirm'
             cp /work/*.pkg.tar.zst /work/out/
           "
           sudo chown -R $USER:$USER out/ pacman-cache/ cargo-cache/
@@ -77,6 +81,7 @@ jobs:
         with:
           name: alga-package
           path: out/*.pkg.tar.zst
+          if-no-files-found: error
 
   release:
     needs: build-arch-package
